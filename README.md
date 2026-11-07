@@ -50,6 +50,11 @@ The site at https://imzondax.github.io/cloud-iptv/ is served from `docs/`.
 Cloud IPTV is only a player. It includes no channels or video, and you add
 sources you have the right to use.
 
+## License
+
+Public domain under [The Unlicense](LICENSE): do anything you want with this
+code. The third-party files listed under Credits keep their own licenses.
+
 ## Credits
 
 - This product uses the TMDB API but is not endorsed or certified by TMDB.
