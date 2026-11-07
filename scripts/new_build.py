@@ -25,6 +25,10 @@ def main(notes):
         sys.exit('No version: x.y.z+n line in pubspec.yaml.')
     version, build = match[1], int(match[2]) + 1
     text = text[:match.start()] + f'version: {version}+{build}' + text[match.end():]
+    text, found = re.subn(r'^  msix_version: .*$', f'  msix_version: {version}.{build}',
+                          text, flags=re.M)
+    if found != 1:
+        sys.exit('No msix_version line in pubspec.yaml.')
 
     changelog = pathlib.Path('CHANGELOG.md')
     log = changelog.read_text(encoding='utf8')
