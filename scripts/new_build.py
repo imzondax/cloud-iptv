@@ -20,7 +20,7 @@ def main(notes):
 
     pubspec = pathlib.Path('pubspec.yaml')
     text = pubspec.read_text(encoding='utf8')
-    match = re.search(r'^version: (\d+\.\d+\.\d+)\+(\d+)\s*$', text, re.M)
+    match = re.search(r'^version: (\d+\.\d+\.\d+)\+(\d+)[ \t]*$', text, re.M)
     if match is None:
         sys.exit('No version: x.y.z+n line in pubspec.yaml.')
     version, build = match[1], int(match[2]) + 1
