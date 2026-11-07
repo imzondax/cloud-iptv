@@ -46,6 +46,7 @@ class Channels extends Table {
   TextColumn get tvgId => text().nullable()();
   TextColumn get backendType => textEnum<BackendType>()();
   IntColumn get sortOrder => integer()();
+  IntColumn get archiveDays => integer().withDefault(const Constant(0))();
 
   /// Panels list an item once per category, under the same id.
   @override
@@ -138,6 +139,35 @@ class WatchProgress extends Table {
   Set<Column> get primaryKey => {itemId};
 }
 
+/// Favourite movies and series. Separate from [Favorites], because live,
+/// movie and series ids overlap.
+class FavoriteTitles extends Table {
+  TextColumn get itemId => text()();
+  TextColumn get kind => textEnum<CategoryKind>()();
+
+  @override
+  Set<Column> get primaryKey => {itemId, kind};
+}
+
+/// Kept apart from [Categories], which every sync rewrites.
+class CategoryRules extends Table {
+  TextColumn get categoryId => text()();
+  BoolColumn get hidden => boolean().withDefault(const Constant(false))();
+  BoolColumn get locked => boolean().withDefault(const Constant(false))();
+
+  @override
+  Set<Column> get primaryKey => {categoryId};
+}
+
+class Reminders extends Table {
+  TextColumn get channelId => text()();
+  TextColumn get title => text()();
+  DateTimeColumn get startTime => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {channelId, startTime};
+}
+
 class RecentChannels extends Table {
   TextColumn get channelId => text()();
   DateTimeColumn get watchedAt => dateTime()();
@@ -155,6 +185,7 @@ class Settings extends Table {
 }
 
 const favoritesCategoryId = '__favorites__';
+const _unlockedKey = 'parental_unlocked';
 
 /// Unique items per source. `guide` counts channels that have programmes.
 typedef SourceStats = ({int live, int movies, int series, int guide});
@@ -171,6 +202,7 @@ List<T> _uniqueById<T>(List<T> rows, String Function(T) id) {
 @DriftDatabase(tables: [
   Sources, Categories, Channels, VodItems, SeriesItems, EpgPrograms,
   StreamFallbacks, Favorites, Settings, WatchProgress, RecentChannels,
+  FavoriteTitles, CategoryRules, Reminders,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor])
@@ -183,13 +215,16 @@ class AppDatabase extends _$AppDatabase {
             ));
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onUpgrade: (m, from, to) async {
           if (from < 2) {
-            await m.alterTable(TableMigration(channels));
+            await m.alterTable(TableMigration(
+              channels,
+              newColumns: [channels.archiveDays],
+            ));
             await m.alterTable(TableMigration(vodItems));
             await m.alterTable(TableMigration(seriesItems));
             // Rows lost to the old key only come back with a full download.
@@ -202,8 +237,39 @@ class AppDatabase extends _$AppDatabase {
             await m.createTable(watchProgress);
             await m.createTable(recentChannels);
           }
+          if (from < 4) {
+            // Version 1 databases got this column in their rebuild above.
+            if (from >= 2) await m.addColumn(channels, channels.archiveDays);
+            await m.createTable(favoriteTitles);
+            await m.createTable(categoryRules);
+            await m.createTable(reminders);
+            // Catch-up details only arrive with a full download.
+            await update(sources).write(const SourcesCompanion(
+              etag: Value(null),
+              lastSyncedAt: Value(null),
+            ));
+          }
+        },
+        // A PIN unlock lasts until the app closes.
+        beforeOpen: (details) async {
+          if (details.versionBefore != null) {
+            await (delete(settings)..where((s) => s.key.equals(_unlockedKey)))
+                .go();
+          }
         },
       );
+
+  /// Leaves out what sits in hidden categories, and in locked ones until the
+  /// PIN has been entered. The session flag lives in [settings], so that
+  /// running queries update by themselves when it changes.
+  Expression<bool> _shown(GeneratedColumn<String> categoryId) {
+    final unlocked = select(settings)..where((s) => s.key.equals(_unlockedKey));
+    final blocked = selectOnly(categoryRules)
+      ..addColumns([categoryRules.categoryId])
+      ..where(categoryRules.hidden |
+          (categoryRules.locked & notExistsQuery(unlocked)));
+    return categoryId.isNotInQuery(blocked);
+  }
 
   // Sources
 
@@ -223,6 +289,12 @@ class AppDatabase extends _$AppDatabase {
         await _deleteCatalog(id);
         await (delete(favorites)..where((f) => f.channelId.like('$id:%'))).go();
         await (delete(watchProgress)..where((w) => w.sourceId.equals(id))).go();
+        await (delete(favoriteTitles)..where((f) => f.itemId.like('$id:%')))
+            .go();
+        await (delete(categoryRules)
+              ..where((r) => r.categoryId.like('$id:%')))
+            .go();
+        await (delete(reminders)..where((r) => r.channelId.like('$id:%'))).go();
         await (delete(recentChannels)
               ..where((r) => r.channelId.like('$id:%')))
             .go();
@@ -282,8 +354,7 @@ class AppDatabase extends _$AppDatabase {
     };
     return (select(categories)
           ..where((c) =>
-              c.kind.equalsValue(kind) &
-              c.id.isInQuery(used))
+              c.kind.equalsValue(kind) & c.id.isInQuery(used) & _shown(c.id))
           ..orderBy([(c) => OrderingTerm.asc(c.name)]))
         .watch();
   }
@@ -295,6 +366,7 @@ class AppDatabase extends _$AppDatabase {
       final query = select(channels).join([
         innerJoin(favorites, favorites.channelId.equalsExp(channels.id)),
       ])
+        ..where(_shown(channels.categoryId))
         ..orderBy([OrderingTerm.asc(channels.name)]);
       return query
           .map((row) => row.readTable(channels))
@@ -304,7 +376,7 @@ class AppDatabase extends _$AppDatabase {
     final query = select(channels);
     if (search.isNotEmpty) {
       query
-        ..where((c) => c.name.contains(search))
+        ..where((c) => c.name.contains(search) & _shown(c.categoryId))
         ..limit(_searchLimit);
     } else {
       query.where((c) => c.categoryId.equalsNullable(categoryId));
@@ -314,10 +386,24 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Stream<List<VodItem>> watchVod(String? categoryId, String search) {
+    if (categoryId == favoritesCategoryId && search.isEmpty) {
+      final query = select(vodItems).join([
+        innerJoin(
+            favoriteTitles,
+            favoriteTitles.itemId.equalsExp(vodItems.id) &
+                favoriteTitles.kind.equalsValue(CategoryKind.vod)),
+      ])
+        ..where(_shown(vodItems.categoryId))
+        ..orderBy([OrderingTerm.asc(vodItems.title)]);
+      return query
+          .map((row) => row.readTable(vodItems))
+          .watch()
+          .map((rows) => _uniqueById(rows, (v) => v.id));
+    }
     final query = select(vodItems);
     if (search.isNotEmpty) {
       query
-        ..where((v) => v.title.contains(search))
+        ..where((v) => v.title.contains(search) & _shown(v.categoryId))
         ..limit(_searchLimit);
     } else {
       query.where((v) => v.categoryId.equalsNullable(categoryId));
@@ -327,10 +413,24 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Stream<List<SeriesItem>> watchSeries(String? categoryId, String search) {
+    if (categoryId == favoritesCategoryId && search.isEmpty) {
+      final query = select(seriesItems).join([
+        innerJoin(
+            favoriteTitles,
+            favoriteTitles.itemId.equalsExp(seriesItems.id) &
+                favoriteTitles.kind.equalsValue(CategoryKind.series)),
+      ])
+        ..where(_shown(seriesItems.categoryId))
+        ..orderBy([OrderingTerm.asc(seriesItems.title)]);
+      return query
+          .map((row) => row.readTable(seriesItems))
+          .watch()
+          .map((rows) => _uniqueById(rows, (s) => s.id));
+    }
     final query = select(seriesItems);
     if (search.isNotEmpty) {
       query
-        ..where((s) => s.title.contains(search))
+        ..where((s) => s.title.contains(search) & _shown(s.categoryId))
         ..limit(_searchLimit);
     } else {
       query.where((s) => s.categoryId.equalsNullable(categoryId));
@@ -368,6 +468,92 @@ class AppDatabase extends _$AppDatabase {
             guide: r.read<int>('guide'),
           ));
 
+  // Category rules
+
+  /// Every category, whatever its rules, for managing them.
+  Stream<List<Category>> watchAllCategories() => (select(categories)
+        ..orderBy([
+          (c) => OrderingTerm.asc(c.kind),
+          (c) => OrderingTerm.asc(c.name),
+        ]))
+      .watch();
+
+  Stream<Map<String, CategoryRule>> watchCategoryRules() => select(categoryRules)
+      .watch()
+      .map((rows) => {for (final r in rows) r.categoryId: r});
+
+  Future<void> setCategoryRule(String categoryId,
+          {required bool hidden, required bool locked}) =>
+      into(categoryRules).insertOnConflictUpdate(CategoryRulesCompanion.insert(
+        categoryId: categoryId,
+        hidden: Value(hidden),
+        locked: Value(locked),
+      ));
+
+  /// Without a PIN, a lock could never be opened again.
+  Future<void> clearLocks() => update(categoryRules)
+      .write(const CategoryRulesCompanion(locked: Value(false)));
+
+  Future<void> setUnlocked(bool unlocked) => unlocked
+      ? saveSetting(_unlockedKey, '1')
+      : (delete(settings)..where((s) => s.key.equals(_unlockedKey))).go();
+
+  Stream<bool> watchUnlocked() => watchSetting(_unlockedKey).map((v) => v != null);
+
+  // Favourite movies and series
+
+  Stream<Set<String>> watchFavoriteTitles(CategoryKind kind) =>
+      (select(favoriteTitles)..where((f) => f.kind.equalsValue(kind)))
+          .watch()
+          .map((rows) => rows.map((f) => f.itemId).toSet());
+
+  Future<void> setFavoriteTitle(
+          String itemId, CategoryKind kind, bool favorite) =>
+      favorite
+          ? into(favoriteTitles).insertOnConflictUpdate(
+              FavoriteTitlesCompanion.insert(itemId: itemId, kind: kind))
+          : (delete(favoriteTitles)
+                ..where((f) =>
+                    f.itemId.equals(itemId) & f.kind.equalsValue(kind)))
+              .go();
+
+  // Reminders
+
+  Stream<List<Reminder>> watchReminders() => select(reminders).watch();
+
+  Future<void> addReminder(String channelId, EpgProgram program) =>
+      into(reminders).insertOnConflictUpdate(RemindersCompanion.insert(
+        channelId: channelId,
+        title: program.title,
+        startTime: program.startTime,
+      ));
+
+  Future<void> removeReminder(String channelId, DateTime startTime) =>
+      (delete(reminders)
+            ..where((r) =>
+                r.channelId.equals(channelId) &
+                r.startTime.equals(startTime)))
+          .go();
+
+  /// Takes the reminders starting by [until], so each fires only once.
+  Future<List<Reminder>> takeDueReminders(DateTime until) =>
+      transaction(() async {
+        final due = (select(reminders)
+          ..where((r) => r.startTime.isSmallerOrEqualValue(until)));
+        final rows = await due.get();
+        await (delete(reminders)
+              ..where((r) => r.startTime.isSmallerOrEqualValue(until)))
+            .go();
+        return rows;
+      });
+
+  Future<PlaylistChannel?> channelById(String id) async =>
+      (await (select(channels)
+                ..where((c) => c.id.equals(id))
+                ..limit(1))
+              .get())
+          .firstOrNull;
+
   // Watch history
 
   Future<void> saveProgress(VodItem item, Duration position, Duration duration) =>
@@ -392,11 +578,16 @@ class AppDatabase extends _$AppDatabase {
     return row == null ? null : Duration(milliseconds: row.positionMs);
   }
 
-  Stream<List<WatchProgressData>> watchKeepWatching(int limit) =>
-      (select(watchProgress)
-            ..orderBy([(w) => OrderingTerm.desc(w.updatedAt)])
-            ..limit(limit))
-          .watch();
+  Stream<List<WatchProgressData>> watchKeepWatching(int limit) {
+    final blocked = selectOnly(vodItems)
+      ..addColumns([vodItems.id])
+      ..where(_shown(vodItems.categoryId).not());
+    return (select(watchProgress)
+          ..where((w) => w.itemId.isNotInQuery(blocked))
+          ..orderBy([(w) => OrderingTerm.desc(w.updatedAt)])
+          ..limit(limit))
+        .watch();
+  }
 
   Future<void> markChannelWatched(String channelId) =>
       into(recentChannels).insertOnConflictUpdate(
@@ -408,6 +599,7 @@ class AppDatabase extends _$AppDatabase {
       innerJoin(
           recentChannels, recentChannels.channelId.equalsExp(channels.id)),
     ])
+      ..where(_shown(channels.categoryId))
       ..orderBy([OrderingTerm.desc(recentChannels.watchedAt)])
       ..limit(limit * 4);
     return query.map((row) => row.readTable(channels)).watch().map(
@@ -419,8 +611,8 @@ class AppDatabase extends _$AppDatabase {
   Future<List<CatalogTitle>> catalogTitles(CategoryKind kind) async {
     if (kind == CategoryKind.series) {
       final q = selectOnly(seriesItems)
-        ..addColumns(
-            [seriesItems.id, seriesItems.title, seriesItems.year]);
+        ..addColumns([seriesItems.id, seriesItems.title, seriesItems.year])
+        ..where(_shown(seriesItems.categoryId));
       return q
           .map((r) => (
                 id: r.read(seriesItems.id)!,
@@ -430,7 +622,8 @@ class AppDatabase extends _$AppDatabase {
           .get();
     }
     final q = selectOnly(vodItems)
-      ..addColumns([vodItems.id, vodItems.title, vodItems.year]);
+      ..addColumns([vodItems.id, vodItems.title, vodItems.year])
+      ..where(_shown(vodItems.categoryId));
     return q
         .map((r) => (
               id: r.read(vodItems.id)!,
@@ -471,16 +664,20 @@ class AppDatabase extends _$AppDatabase {
       ...await (select(channels).join([
         innerJoin(favorites, favorites.channelId.equalsExp(channels.id)),
       ])
+            ..where(_shown(channels.categoryId))
             ..orderBy([OrderingTerm.asc(channels.name)])
             ..limit(rows))
           .map((row) => row.readTable(channels))
           .get(),
       ...await (select(channels)
-            ..where((c) => coalesce([c.tvgId, c.id]).isInQuery(airing))
+            ..where((c) =>
+                coalesce([c.tvgId, c.id]).isInQuery(airing) &
+                _shown(c.categoryId))
             ..orderBy([(c) => OrderingTerm.asc(c.sortOrder)])
             ..limit(rows))
           .get(),
       ...await (select(channels)
+            ..where((c) => _shown(c.categoryId))
             ..orderBy([(c) => OrderingTerm.asc(c.sortOrder)])
             ..limit(rows))
           .get(),
@@ -489,6 +686,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Stream<List<VodItem>> watchTopVod(int limit) => (select(vodItems)
+        ..where((v) => _shown(v.categoryId))
         ..orderBy([
           (v) => OrderingTerm.desc(v.rating),
           (v) => OrderingTerm.desc(v.year),
@@ -499,6 +697,7 @@ class AppDatabase extends _$AppDatabase {
       .map((rows) => _uniqueById(rows, (v) => v.id).take(limit).toList());
 
   Stream<List<SeriesItem>> watchTopSeries(int limit) => (select(seriesItems)
+        ..where((s) => _shown(s.categoryId))
         ..orderBy([
           (s) => OrderingTerm.desc(s.rating),
           (s) => OrderingTerm.desc(s.year),
@@ -565,6 +764,14 @@ class AppDatabase extends _$AppDatabase {
       (await (select(settings)..where((s) => s.key.equals(key)))
               .getSingleOrNull())
           ?.value;
+
+  Future<void> deleteSetting(String key) =>
+      (delete(settings)..where((s) => s.key.equals(key))).go();
+
+  Stream<String?> watchSetting(String key) =>
+      (select(settings)..where((s) => s.key.equals(key)))
+          .watchSingleOrNull()
+          .map((s) => s?.value);
 
   Future<void> saveSetting(String key, String value) => into(settings)
       .insertOnConflictUpdate(SettingsCompanion.insert(key: key, value: value));

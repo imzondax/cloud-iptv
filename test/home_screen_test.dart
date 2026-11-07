@@ -10,9 +10,11 @@ import 'package:cloud_iptv/services/database.dart';
 import 'package:cloud_iptv/services/playlist_backend.dart';
 import 'package:cloud_iptv/services/tmdb.dart';
 import 'package:cloud_iptv/ui/dashboard_tab.dart';
+import 'package:cloud_iptv/ui/guide_tab.dart';
 import 'package:cloud_iptv/ui/home_screen.dart';
 import 'package:cloud_iptv/ui/library_tab.dart';
 import 'package:cloud_iptv/ui/player_screen.dart';
+import 'package:cloud_iptv/ui/sources_tab.dart';
 import 'package:cloud_iptv/ui/theme.dart';
 import 'package:cloud_iptv/ui/widgets.dart';
 import 'package:dio/dio.dart';
@@ -91,7 +93,9 @@ class FakeActiveStream extends ActiveStream {
   }
 
   @override
-  Future<void> playVod(VodItem item) async => played.add(item.title);
+  Future<void> playVod(VodItem item,
+          {List<VodItem> upNext = const []}) async =>
+      played.add(item.title);
 
   @override
   Future<void> stop() async {}
@@ -345,6 +349,146 @@ void main() {
     await tester.runAsync(db.close);
   }, timeout: const Timeout(Duration(minutes: 1)));
 
+  Future<AppDatabase> pumpApp(WidgetTester tester, Widget home) async {
+    await binding.setSurfaceSize(const Size(1440, 1000));
+    addTearDown(() => binding.setSurfaceSize(null));
+    final db = AppDatabase(NativeDatabase.memory());
+    await tester.runAsync(() => seed(db));
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        databaseProvider.overrideWithValue(db),
+        dioProvider
+            .overrideWithValue(Dio()..httpClientAdapter = EpisodesAdapter()),
+        activeStreamProvider.overrideWith(FakeActiveStream.new),
+        playerProvider.overrideWith((ref) => Completer<IptvPlayer>().future),
+      ],
+      child: MaterialApp(theme: onAirTheme(), home: home),
+    ));
+    await settle(tester);
+    return db;
+  }
+
+  Future<void> finish(WidgetTester tester, AppDatabase db) async {
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(db.close);
+  }
+
+  testWidgets('one search covers channels, movies and series', (tester) async {
+    final db =
+        await pumpApp(tester, const Scaffold(body: DashboardTab()));
+    await tester.enterText(find.byType(TextField), 'Harbor');
+    await settle(tester);
+    for (final shelf in ['Channels', 'Movies', 'Series']) {
+      expect(find.byKey(ValueKey(shelf)), findsOneWidget);
+    }
+    expect(find.byKey(const ValueKey('Top movies')), findsNothing);
+    await tester.enterText(find.byType(TextField), 'zzzz');
+    await settle(tester);
+    expect(find.text('Nothing matches your search'), findsOneWidget);
+    await finish(tester, db);
+  });
+
+  testWidgets('a title can be taken out of Keep watching', (tester) async {
+    final db =
+        await pumpApp(tester, const Scaffold(body: DashboardTab()));
+    await tester.runAsync(() => db.saveProgress(
+          const VodItem(id: '1:0', sourceId: 1, title: 'Half seen',
+              streamUrl: 'u', categoryId: 'c', sortOrder: 0),
+          const Duration(minutes: 5),
+          const Duration(minutes: 90),
+        ));
+    await settle(tester);
+    expect(find.byKey(const ValueKey('Keep watching')), findsOneWidget);
+    await tester.tap(find.byTooltip('Remove from Keep watching'));
+    await settle(tester);
+    expect(find.byKey(const ValueKey('Keep watching')), findsNothing);
+    await finish(tester, db);
+  });
+
+  testWidgets('tab and favourites are remembered; a star fills the list',
+      (tester) async {
+    final db = await pumpApp(tester, const HomeScreen());
+    await tester.tap(find.text('Movies'));
+    await settle(tester);
+    expect(await tester.runAsync(() => db.setting('last_tab')), '1');
+
+    await tester.tap(find.byTooltip('Add to favorites').first);
+    await settle(tester);
+    final saved = await tester
+        .runAsync(() => db.watchFavoriteTitles(CategoryKind.vod).first);
+    expect(saved, hasLength(1));
+    expect(find.byTooltip('Remove from favorites'), findsOneWidget);
+    await finish(tester, db);
+  });
+
+  testWidgets('a future programme takes a reminder', (tester) async {
+    final db = await pumpApp(tester, const Scaffold(body: GuideTab()));
+    await tester.tap(find.text('News').first);
+    await settle(tester);
+    await tester.tap(find.text('Programme 3 on channel 1').first);
+    await settle(tester);
+    expect(FakeActiveStream.played, isNot(contains('Programme 3')));
+    expect(await tester.runAsync(() => db.watchReminders().first), hasLength(1));
+    expect(find.textContaining('remind you'), findsOneWidget);
+    await finish(tester, db);
+  });
+
+  testWidgets('hiding, a PIN and locking work from Sources', (tester) async {
+    final db = await pumpApp(tester, const Scaffold(body: SourcesTab()));
+    Future<void> press(String text) async {
+      final button = find.text(text).last;
+      await tester.ensureVisible(button);
+      await settle(tester);
+      await tester.tap(button);
+      await settle(tester);
+    }
+
+    Future<void> enterPin(String pin) async {
+      await tester.enterText(find.byType(TextField).last, pin);
+      await press('OK');
+    }
+
+    await press('Manage categories');
+    await tester.tap(find.byTooltip('Hide Action'));
+    await settle(tester);
+    await press('Done');
+    expect(
+        await tester.runAsync(() => db.watchCategories(CategoryKind.vod).first),
+        isEmpty);
+
+    await press('Set PIN');
+    await enterPin('12');
+    expect(find.text('A PIN needs at least 4 digits'), findsOneWidget);
+    await press('Set PIN');
+    await enterPin('2468');
+    expect(find.text('Lock now'), findsOneWidget);
+
+    await press('Manage categories');
+    await tester.tap(find.byTooltip('Lock Crime'));
+    await settle(tester);
+    await press('Done');
+    await press('Lock now');
+    expect(find.text('Manage categories'), findsNothing);
+    expect(
+        await tester
+            .runAsync(() => db.watchCategories(CategoryKind.series).first),
+        isEmpty);
+
+    await press('Unlock');
+    await enterPin('0000');
+    expect(find.text('Wrong PIN'), findsOneWidget);
+    await press('Unlock');
+    await enterPin('2468');
+    expect(
+        await tester
+            .runAsync(() => db.watchCategories(CategoryKind.series).first),
+        hasLength(1));
+
+    await press('Remove PIN');
+    expect(find.text('Set PIN'), findsOneWidget);
+    await finish(tester, db);
+  });
+
   testWidgets('home shows history and TMDB lists it can play', (tester) async {
     await tester.runAsync(loadFonts);
     await binding.setSurfaceSize(const Size(1440, 2800));
@@ -468,6 +612,7 @@ void main() {
     await seed(db);
     await db.customStatement('DROP TABLE watch_progress');
     await db.customStatement('DROP TABLE recent_channels');
+    await db.customStatement('ALTER TABLE channels DROP COLUMN archive_days');
     await db.customStatement('PRAGMA user_version = 2');
     await db.close();
 
@@ -531,6 +676,13 @@ void main() {
     }
     final top = await db.watchTopVod(20).first;
     expect(top.map((m) => m.id), ['best', 'low', 'none']);
+  });
+
+  test('the wheel moves volume in steps and stops at the limits', () {
+    expect(nextVolume(50, -100), 55);
+    expect(nextVolume(50, 100), 45);
+    expect(nextVolume(98, -100), 100);
+    expect(nextVolume(3, 100), 0);
   });
 
   test('monograms use up to two initials', () {

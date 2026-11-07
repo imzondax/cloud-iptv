@@ -19,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 
 /// 50s of Big Buck Bunny (CC BY 3.0, Blender Foundation) as H.264/AAC MPEG-TS.
 const _sample = 'integration_test/fixtures/sample.ts';
@@ -249,6 +250,86 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   }, timeout: const Timeout(Duration(minutes: 2)));
 
+  testWidgets('keys, picture size and rolling into the next episode',
+      (tester) async {
+    final db = AppDatabase(NativeDatabase.memory());
+    await db.saveSetting(volumeKey, '40');
+    final container = ProviderContainer(
+        overrides: [databaseProvider.overrideWithValue(db)]);
+    addTearDown(() async {
+      container.dispose();
+      await db.close();
+    });
+    VodItem episode(String id) => VodItem(
+          id: id,
+          sourceId: 1,
+          title: id,
+          streamUrl: File(_sample).absolute.path,
+          categoryId: 'c',
+          sortOrder: 0,
+        );
+    final active = container.read(activeStreamProvider.notifier);
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: const MaterialApp(home: PlayerScreen()),
+    ));
+    Future<void> pumping(Future<void> call) async {
+      var done = false;
+      unawaited(call.whenComplete(() => done = true));
+      await until(tester, () => done);
+      await call;
+    }
+
+    await pumping(active.playVod(episode('First'), upNext: [episode('Second')]));
+    player = await tester.runAsync(() => container.read(playerProvider.future))
+        as IptvPlayer;
+    await until(tester, () => position() > const Duration(seconds: 1));
+
+    // A saved volume is back after a restart.
+    double volume() => player.player.state.volume;
+    await until(tester, () => volume() == 40,
+        timeout: const Duration(seconds: 3));
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyM);
+    await until(tester, () => volume() == 0,
+        timeout: const Duration(seconds: 3));
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyM);
+    await until(tester, () => volume() == 40,
+        timeout: const Duration(seconds: 3));
+
+    final before = position();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await until(tester, () => position() >= before + const Duration(seconds: 9),
+        timeout: const Duration(seconds: 5));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await until(tester, () => position() < before + const Duration(seconds: 9),
+        timeout: const Duration(seconds: 5));
+
+    await tester.tap(find.byTooltip('Start over'));
+    await until(tester, () => position() < const Duration(seconds: 3),
+        timeout: const Duration(seconds: 5));
+
+    await tester.tap(find.byTooltip('Picture size'));
+    await wait(tester, const Duration(milliseconds: 400));
+    await tester.tap(find.text('Zoom'));
+    await wait(tester, const Duration(milliseconds: 400));
+    expect(tester.widget<Video>(find.byType(Video)).fit, BoxFit.cover);
+
+    await player.player.seek(const Duration(seconds: 49));
+    await until(tester,
+        () => find.textContaining('Up next in').evaluate().isNotEmpty,
+        timeout: const Duration(seconds: 15));
+    await until(
+        tester, () => container.read(activeStreamProvider)?.title == 'Second',
+        timeout: const Duration(seconds: 12));
+    await until(tester, () => position() > const Duration(seconds: 1),
+        timeout: const Duration(seconds: 15));
+    expect(find.textContaining('Up next in'), findsNothing);
+    expect(await db.progress('First'), isNull);
+
+    await pumping(active.stop());
+    await tester.pumpWidget(const SizedBox());
+  }, timeout: const Timeout(Duration(minutes: 2)));
+
   testWidgets('the player screen drives playback end to end', (tester) async {
     server = StreamServer();
     await server.start();
@@ -323,6 +404,24 @@ void main() {
     // A healthy stream connects once and never claims to be reconnecting.
     expect(server.count('/live'), 1);
     expect(player.notice.value, isNull);
+
+    // The wheel: a fast spin down must count every notch, and up restores it.
+    double volume() => player.player.state.volume;
+    final mouse = TestPointer(1, ui.PointerDeviceKind.mouse);
+    final center = tester.getCenter(find.byType(PlayerScreen));
+    await tester.sendEventToBinding(mouse.hover(center));
+    for (var i = 0; i < 3; i++) {
+      await tester.sendEventToBinding(mouse.scroll(const Offset(0, 100)));
+    }
+    await until(tester, () => volume() == 85,
+        timeout: const Duration(seconds: 3));
+    await tester.sendEventToBinding(mouse.scroll(const Offset(0, -100)));
+    await until(tester, () => volume() == 90,
+        timeout: const Duration(seconds: 3));
+    expect(overlay(), 1);
+    await wait(tester, const Duration(milliseconds: 800));
+    expect(await db.setting(volumeKey), '90.0');
+
     await tester.tap(find.byTooltip('Pause'));
     await until(tester, () => !player.player.state.playing);
 

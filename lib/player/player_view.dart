@@ -3,19 +3,43 @@ import 'package:media_kit_video/media_kit_video.dart';
 
 import 'iptv_player.dart';
 
+enum PictureSize {
+  contain('Fit', BoxFit.contain),
+  zoom('Zoom', BoxFit.cover),
+  stretch('Stretch', BoxFit.fill),
+  wide('16:9', BoxFit.contain, 16 / 9),
+  classic('4:3', BoxFit.contain, 4 / 3);
+
+  const PictureSize(this.label, this.fit, [this.aspectRatio]);
+
+  final String label;
+  final BoxFit fit;
+  final double? aspectRatio;
+}
+
 /// Video surface with a non-blocking status badge: controls stay usable while
 /// buffering or reconnecting.
 class IptvPlayerView extends StatelessWidget {
-  const IptvPlayerView({super.key, required this.player});
+  const IptvPlayerView({
+    super.key,
+    required this.player,
+    this.picture = PictureSize.contain,
+  });
 
   final IptvPlayer player;
+  final PictureSize picture;
 
   @override
   Widget build(BuildContext context) {
     return Stack(
       fit: StackFit.expand,
       children: [
-        Video(controller: player.video, controls: NoVideoControls),
+        Video(
+          controller: player.video,
+          controls: NoVideoControls,
+          fit: picture.fit,
+          aspectRatio: picture.aspectRatio,
+        ),
         Align(
           alignment: Alignment.topRight,
           child: IgnorePointer(

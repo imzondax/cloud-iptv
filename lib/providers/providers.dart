@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +13,7 @@ import '../services/m3u_parser.dart';
 import '../services/playlist_backend.dart';
 import '../services/sync_service.dart';
 import '../services/tmdb.dart';
+import '../services/updates.dart';
 import '../services/xtream_client.dart';
 
 final databaseProvider = Provider<AppDatabase>((ref) {
@@ -128,6 +131,50 @@ final scheduleProvider =
 
 const _shelfSize = 20;
 
+final settingProvider = StreamProvider.family<String?, String>(
+    (ref, key) => ref.watch(databaseProvider).watchSetting(key));
+
+final remindersProvider = StreamProvider(
+    (ref) => ref.watch(databaseProvider).watchReminders());
+
+final favoriteTitlesProvider = StreamProvider.family<Set<String>, CategoryKind>(
+    (ref, kind) => ref.watch(databaseProvider).watchFavoriteTitles(kind));
+
+final allCategoriesProvider = StreamProvider.autoDispose(
+    (ref) => ref.watch(databaseProvider).watchAllCategories());
+
+final categoryRulesProvider = StreamProvider(
+    (ref) => ref.watch(databaseProvider).watchCategoryRules());
+
+final unlockedProvider =
+    StreamProvider((ref) => ref.watch(databaseProvider).watchUnlocked());
+
+final updateProvider =
+    FutureProvider((ref) => findUpdate(ref.watch(dioProvider)));
+
+typedef PosterQuery = ({String title, int? year, bool tv});
+
+/// A TMDB poster for a title without artwork. Answers are kept, including
+/// "none", so each title costs one request ever; failures are not.
+final fallbackPosterProvider = FutureProvider.autoDispose
+    .family<String?, PosterQuery>((ref, q) async {
+  final key = await ref.watch(tmdbKeyProvider.future);
+  if (key == null || key.isEmpty) return null;
+  final db = ref.read(databaseProvider);
+  final title = searchableTitle(q.title);
+  final cacheKey = 'art:${q.tv}:${normalizeTitle(title)}:${q.year}';
+  final cached = await db.setting(cacheKey);
+  if (cached != null) return cached.isEmpty ? null : cached;
+  try {
+    final url = await searchTmdbPoster(ref.read(dioProvider), key,
+        title: title, year: q.year, tv: q.tv);
+    await db.saveSetting(cacheKey, url ?? '');
+    return url;
+  } catch (_) {
+    return null;
+  }
+});
+
 final keepWatchingProvider = StreamProvider(
     (ref) => ref.watch(databaseProvider).watchKeepWatching(_shelfSize));
 
@@ -179,6 +226,8 @@ typedef CuratedShelf = ({String name, List<Object> items});
 /// TMDB's lists, narrowed to what the user's providers can actually play.
 final curatedShelvesProvider = FutureProvider<List<CuratedShelf>>((ref) async {
   ref.watch(sourcesProvider);
+  ref.watch(categoryRulesProvider);
+  ref.watch(unlockedProvider);
   final key = await ref.watch(tmdbKeyProvider.future);
   if (key == null || key.isEmpty) return const [];
   final db = ref.read(databaseProvider);
@@ -205,6 +254,8 @@ final recommendedChannelsProvider = FutureProvider((ref) {
   ref.watch(minuteProvider);
   ref.watch(sourcesProvider);
   ref.watch(favoriteIdsProvider);
+  ref.watch(categoryRulesProvider);
+  ref.watch(unlockedProvider);
   return ref
       .watch(databaseProvider)
       .recommendedChannels(DateTime.now(), _shelfSize);
@@ -292,7 +343,12 @@ class BufferSetting extends AsyncNotifier<BufferProfile> {
 final playerProvider = FutureProvider<IptvPlayer>((ref) async {
   final enabled = await ref.read(hardwareAccelerationProvider.future);
   final buffer = await ref.read(bufferProfileProvider.future);
-  final player = IptvPlayer(hardwareAcceleration: enabled, buffer: buffer);
+  final saved = await ref.read(databaseProvider).setting(volumeKey);
+  final player = IptvPlayer(
+    hardwareAcceleration: enabled,
+    buffer: buffer,
+    volume: double.tryParse(saved ?? '') ?? 100,
+  );
   ref.onDispose(player.dispose);
   return player;
 });
@@ -300,14 +356,32 @@ final playerProvider = FutureProvider<IptvPlayer>((ref) async {
 final activeStreamProvider =
     NotifierProvider<ActiveStream, NowPlaying?>(ActiveStream.new);
 
+const volumeKey = 'volume';
+const pinKey = 'parental_pin';
+const audioLanguageKey = 'audio_language';
+const subtitleLanguageKey = 'subtitle_language';
+
+// shortcut: unsalted, so a 4 digit PIN falls to anyone who can read the
+// database. Fine against a child at the screen, not against a determined adult.
+String hashPin(String pin) =>
+    sha256.convert(utf8.encode('cloud-iptv:$pin')).toString();
+
 class NowPlaying {
-  const NowPlaying(this.title, {this.channel, this.playlist = const []});
+  const NowPlaying(
+    this.title, {
+    this.channel,
+    this.playlist = const [],
+    this.upNext = const [],
+  });
 
   final String title;
   final PlaylistChannel? channel;
 
   /// The channels previous/next and the channel list move through.
   final List<PlaylistChannel> playlist;
+
+  /// Episodes to continue with, in order.
+  final List<VodItem> upNext;
 }
 
 /// The next channel, wrapping at both ends.
@@ -341,6 +415,7 @@ class ActiveStream extends Notifier<NowPlaying?> {
   Timer? _saver;
   Timer? _recent;
   VodItem? _vod;
+  PlaylistChannel? _lastChannel;
 
   @override
   NowPlaying? build() {
@@ -369,8 +444,18 @@ class ActiveStream extends Notifier<NowPlaying?> {
     }
   }
 
+  Future<void> _applyLanguages(IptvPlayer player) async {
+    final db = ref.read(databaseProvider);
+    await player.setLanguages(
+      audio: await db.setting(audioLanguageKey) ?? '',
+      subtitles: await db.setting(subtitleLanguageKey) ?? '',
+    );
+  }
+
   Future<void> playChannel(PlaylistChannel channel,
       {List<PlaylistChannel>? playlist}) async {
+    final current = state?.channel;
+    if (current != null && current.id != channel.id) _lastChannel = current;
     state = NowPlaying(channel.name,
         channel: channel, playlist: playlist ?? state?.playlist ?? [channel]);
     _stopTracking();
@@ -379,7 +464,25 @@ class ActiveStream extends Notifier<NowPlaying?> {
         _countsAsWatched, () => db.markChannelWatched(channel.id));
     final fallbacks = await db.fallbackUrls(channel.id);
     final player = await ref.read(playerProvider.future);
+    await _applyLanguages(player);
     await player.open([channel.streamUrl, ...fallbacks], live: true);
+  }
+
+  /// Flips back to the channel watched before this one.
+  Future<void> lastChannel() async {
+    final channel = _lastChannel;
+    if (channel != null) await playChannel(channel);
+  }
+
+  /// Replays [program] from the provider's archive.
+  Future<void> playCatchUp(PlaylistChannel channel, EpgProgram program) async {
+    final url = catchUpUrl(channel, program);
+    if (url == null) return;
+    state = NowPlaying(program.title);
+    _stopTracking();
+    final player = await ref.read(playerProvider.future);
+    await _applyLanguages(player);
+    await player.open([url], live: false);
   }
 
   Future<void> step(int delta) async {
@@ -389,14 +492,23 @@ class ActiveStream extends Notifier<NowPlaying?> {
     if (next != null) await playChannel(next);
   }
 
-  Future<void> playVod(VodItem item) async {
-    state = NowPlaying(item.title);
+  Future<void> playVod(VodItem item,
+      {List<VodItem> upNext = const []}) async {
+    state = NowPlaying(item.title, upNext: upNext);
+    final player = await ref.read(playerProvider.future);
+    // The episode ending here may not have hit a save tick since it finished.
+    await _saveProgress(player);
     _stopTracking();
     final start = await ref.read(databaseProvider).progress(item.id);
-    final player = await ref.read(playerProvider.future);
+    await _applyLanguages(player);
     await player.open([item.streamUrl], live: false, start: start);
     _vod = item;
     _saver = Timer.periodic(_saveEvery, (_) => _saveProgress(player));
+  }
+
+  Future<void> playNext() async {
+    final next = state?.upNext ?? const <VodItem>[];
+    if (next.isNotEmpty) await playVod(next.first, upNext: next.sublist(1));
   }
 
   Future<void> stop() async {

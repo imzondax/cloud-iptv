@@ -194,6 +194,8 @@ void main() {
           type TEXT NOT NULL, name TEXT NOT NULL, url TEXT NOT NULL,
           username TEXT, password TEXT, epg_url TEXT, etag TEXT,
           last_synced_at INTEGER);
+        CREATE TABLE settings (key TEXT NOT NULL PRIMARY KEY,
+          value TEXT NOT NULL);
         CREATE TABLE channels (id TEXT NOT NULL, source_id INTEGER NOT NULL,
           name TEXT NOT NULL, logo_url TEXT, stream_url TEXT NOT NULL,
           category_id TEXT NOT NULL, tvg_id TEXT, backend_type TEXT NOT NULL,

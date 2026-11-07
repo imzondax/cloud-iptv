@@ -8,6 +8,8 @@ import 'player_screen.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
+const _savedCategory = 'category_live';
+
 class LiveTab extends ConsumerStatefulWidget {
   const LiveTab({super.key});
 
@@ -21,10 +23,18 @@ class _LiveTabState extends ConsumerState<LiveTab> {
   String? _selectedId;
 
   @override
+  void initState() {
+    super.initState();
+    ref.read(databaseProvider).setting(_savedCategory).then((id) {
+      if (mounted && id != null) setState(() => _picked ??= id);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final categories =
         ref.watch(categoriesProvider(CategoryKind.live)).value ?? const [];
-    final categoryId = _picked ?? categories.firstOrNull?.id;
+    final categoryId = pickCategory(_picked, categories);
     final rows = ref.watch(browseProvider((
       kind: CategoryKind.live,
       categoryId: categoryId,
@@ -35,7 +45,11 @@ class _LiveTabState extends ConsumerState<LiveTab> {
     final selected = channels.where((c) => c.id == _selectedId).firstOrNull ??
         channels.firstOrNull;
 
-    void pick(String id) => setState(() => _picked = id);
+    void pick(String id) {
+      setState(() => _picked = id);
+      ref.read(databaseProvider).saveSetting(_savedCategory, id);
+    }
+
     void play(PlaylistChannel c) =>
         openChannel(context, ref, c, playlist: channels);
 

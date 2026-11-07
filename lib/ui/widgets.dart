@@ -46,6 +46,12 @@ double progressOf(EpgProgram p, DateTime now) {
   return (now.difference(p.startTime).inSeconds / total).clamp(0.0, 1.0);
 }
 
+/// The chosen category, unless it has since been hidden, locked or removed.
+String? pickCategory(String? picked, List<Category> categories) =>
+    picked == favoritesCategoryId || categories.any((c) => c.id == picked)
+        ? picked
+        : categories.firstOrNull?.id;
+
 class ChannelLogo extends StatelessWidget {
   const ChannelLogo({
     super.key,

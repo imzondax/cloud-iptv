@@ -57,6 +57,7 @@ class PlaylistChannel {
     this.tvgId,
     required this.backendType,
     required this.sortOrder,
+    this.archiveDays = 0,
   });
 
   final String id;
@@ -68,6 +69,9 @@ class PlaylistChannel {
   final String? tvgId;
   final BackendType backendType;
   final int sortOrder;
+
+  /// How far back the provider keeps this channel, for catch-up.
+  final int archiveDays;
 
   /// The key this channel's programmes are stored under.
   String get epgKey => tvgId ?? id;

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/models.dart';
 import '../providers/providers.dart';
+import '../services/xtream_client.dart';
 import 'player_screen.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -57,7 +58,7 @@ class _GuideTabState extends ConsumerState<GuideTab> {
     ref.watch(minuteProvider);
     final categories =
         ref.watch(categoriesProvider(CategoryKind.live)).value ?? const [];
-    final categoryId = _picked ?? categories.firstOrNull?.id;
+    final categoryId = pickCategory(_picked, categories);
     final rows = ref.watch(browseProvider((
       kind: CategoryKind.live,
       categoryId: categoryId,
@@ -269,10 +270,73 @@ class _NameCell extends ConsumerWidget {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.w600)),
                 ),
+                if (channel.archiveDays > 0)
+                  IconButton(
+                    tooltip: 'Catch up on ${channel.name}',
+                    icon: const Icon(Icons.history,
+                        size: 20, color: OnAir.muted),
+                    onPressed: () => showModalBottomSheet<void>(
+                      context: context,
+                      builder: (_) => _CatchUpSheet(channel: channel),
+                    ),
+                  ),
               ],
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Past programmes the provider still has. Limited by the guide itself, which
+/// keeps about a day of history.
+class _CatchUpSheet extends ConsumerWidget {
+  const _CatchUpSheet({required this.channel});
+
+  final PlaylistChannel channel;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final now = DateTime.now();
+    final past = ref.watch(epgRowProvider((
+      key: channel.epgKey,
+      from: now.subtract(Duration(days: channel.archiveDays)),
+      to: DateTime(now.year, now.month, now.day, now.hour, now.minute),
+    )));
+    final programs = (past.value ?? const <EpgProgram>[])
+        .where((p) => canCatchUp(channel, p, now))
+        .toList()
+        .reversed
+        .toList();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Catch up on ${channel.name}', style: heading(22)),
+          const SizedBox(height: 12),
+          Expanded(
+            child: programs.isEmpty
+                ? const EmptyMessage('No past programmes in the guide')
+                : ListView.builder(
+                    itemCount: programs.length,
+                    itemBuilder: (context, i) {
+                      final p = programs[i];
+                      return ListTile(
+                        title: Text(p.title, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(
+                            '${clock(p.startTime)} – ${clock(p.stopTime)}'),
+                        onTap: () {
+                          final navigator = Navigator.of(context);
+                          navigator.pop();
+                          openCatchUp(navigator.context, ref, channel, p);
+                        },
+                      );
+                    },
+                  ),
+          ),
+        ],
       ),
     );
   }
@@ -301,6 +365,23 @@ class _Timeline extends ConsumerWidget {
         .watch(epgRowProvider(
             (key: channel.epgKey, from: from, to: from.add(_window))))
         .value;
+    final reminders = ref.watch(remindersProvider).value ?? const [];
+    bool reminded(EpgProgram p) => reminders.any((r) =>
+        r.channelId == channel.id && r.startTime.isAtSameMomentAs(p.startTime));
+
+    void remind(EpgProgram p) {
+      final db = ref.read(databaseProvider);
+      final on = !reminded(p);
+      on ? db.addReminder(channel.id, p)
+          : db.removeReminder(channel.id, p.startTime);
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+          content: Text(on
+              ? "We'll remind you before ${p.title}"
+              : 'Reminder removed'),
+        ));
+    }
 
     return DecoratedBox(
       decoration: const BoxDecoration(
@@ -327,8 +408,20 @@ class _Timeline extends ConsumerWidget {
                 child: _Block(
                   program: p,
                   airing: p.startTime.isBefore(now) && p.stopTime.isAfter(now),
-                  onTap: () =>
-                      openChannel(context, ref, channel, playlist: all),
+                  badge: reminded(p)
+                      ? Icons.notifications_active
+                      : canCatchUp(channel, p, now)
+                          ? Icons.history
+                          : null,
+                  onTap: () {
+                    if (p.startTime.isAfter(now)) {
+                      remind(p);
+                    } else if (canCatchUp(channel, p, now)) {
+                      openCatchUp(context, ref, channel, p);
+                    } else {
+                      openChannel(context, ref, channel, playlist: all);
+                    }
+                  },
                 ),
               ),
             ),
@@ -360,11 +453,13 @@ class _Block extends StatelessWidget {
   const _Block({
     required this.program,
     required this.airing,
+    required this.badge,
     required this.onTap,
   });
 
   final EpgProgram program;
   final bool airing;
+  final IconData? badge;
   final VoidCallback onTap;
 
   @override
@@ -381,15 +476,25 @@ class _Block extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(
-                program.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: airing ? OnAir.accentText : OnAir.text,
-                ),
+              Row(
+                children: [
+                  if (badge case final icon?) ...[
+                    Icon(icon, size: 14, color: OnAir.accent),
+                    const SizedBox(width: 4),
+                  ],
+                  Expanded(
+                    child: Text(
+                      program.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: airing ? OnAir.accentText : OnAir.text,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 2),
               Text(

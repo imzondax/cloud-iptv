@@ -27,8 +27,9 @@ class IptvPlayer {
   IptvPlayer({
     required bool hardwareAcceleration,
     BufferProfile buffer = BufferProfile.medium,
+    double volume = 100,
   }) {
-    _ready = _configure(hardwareAcceleration, buffer);
+    _ready = _configure(hardwareAcceleration, buffer, volume);
     _subscriptions = [
       player.stream.position.listen(_onPosition),
       player.stream.error.listen((_) => _onError()),
@@ -80,7 +81,7 @@ class IptvPlayer {
   NativePlayer get _mpv => player.platform as NativePlayer;
 
   Future<void> _configure(
-      bool hardwareAcceleration, BufferProfile buffer) async {
+      bool hardwareAcceleration, BufferProfile buffer, double volume) async {
     // A stream opened before this attaches sits at 0:00 until the connect
     // timeout, and channels are opened before the video view exists.
     await video.platform.future;
@@ -89,6 +90,14 @@ class IptvPlayer {
     await _mpv.setProperty('network-timeout', '10');
     await _applyBuffer(buffer);
     await setHardwareAcceleration(hardwareAcceleration);
+    await player.setVolume(volume);
+  }
+
+  /// Tracks to prefer, as mpv's comma separated language codes.
+  Future<void> setLanguages({required String audio, required String subtitles}) async {
+    await _ready;
+    await _mpv.setProperty('alang', audio);
+    await _mpv.setProperty('slang', subtitles);
   }
 
   Future<void> setBufferProfile(BufferProfile profile) async {

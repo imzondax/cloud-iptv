@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/models.dart';
 import '../providers/providers.dart';
+import '../services/updates.dart';
 import 'dashboard_tab.dart';
 import 'guide_tab.dart';
 import 'library_tab.dart';
 import 'live_tab.dart';
+import 'player_screen.dart';
 import 'sources_tab.dart';
 import 'theme.dart';
+import 'widgets.dart';
 
 const _destinations = [
   (label: 'Live', icon: Icons.live_tv_outlined),
@@ -28,6 +32,7 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   /// Reached from the brand tile, so it sits after the rail's destinations.
   static const _dashboard = 5;
+  static const _savedTab = 'last_tab';
 
   int _tab = 0;
 
@@ -37,11 +42,64 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     // Startup reads only the cache. The network waits for the first frame.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(syncProvider.notifier).syncAll(onlyStale: true);
+      _offerUpdate();
     });
+    ref.read(databaseProvider).setting(_savedTab).then((saved) {
+      final tab = int.tryParse(saved ?? '');
+      if (mounted && tab != null) setState(() => _tab = tab);
+    });
+  }
+
+  void _go(int tab) {
+    setState(() => _tab = tab);
+    ref.read(databaseProvider).saveSetting(_savedTab, '$tab');
+  }
+
+  Future<void> _offerUpdate() async {
+    final version = await ref.read(updateProvider.future);
+    if (version == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      duration: const Duration(seconds: 15),
+      content: Text('Cloud IPTV $version is available'),
+      action: SnackBarAction(
+        label: 'Get it',
+        onPressed: () => launchUrl(Uri.parse(releasesUrl)),
+      ),
+    ));
+  }
+
+  Future<void> _fireReminders() async {
+    final now = DateTime.now();
+    final db = ref.read(databaseProvider);
+    final due = await db.takeDueReminders(now.add(const Duration(minutes: 2)));
+    for (final r in due) {
+      // Set before the app was closed, and long gone by now.
+      if (r.startTime.isBefore(now.subtract(const Duration(minutes: 10)))) {
+        continue;
+      }
+      final channel = await db.channelById(r.channelId);
+      if (channel == null || !mounted) continue;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        duration: const Duration(minutes: 1),
+        content:
+            Text('${r.title} starts at ${clock(r.startTime)} on ${channel.name}'),
+        action: SnackBarAction(
+          label: 'Watch',
+          onPressed: () {
+            if (ref.read(activeStreamProvider) == null) {
+              openChannel(context, ref, channel, playlist: [channel]);
+            } else {
+              ref.read(activeStreamProvider.notifier).playChannel(channel);
+            }
+          },
+        ),
+      ));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(minuteProvider, (_, _) => _fireReminders());
     ref.listen(syncProvider, (_, next) {
       if (next.error != null) {
         ScaffoldMessenger.of(context)
@@ -79,9 +137,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           final rail = _Rail(
             horizontal: narrow,
             selected: _tab,
-            onSelected: (i) => setState(() => _tab = i),
+            onSelected: _go,
             home: _tab == _dashboard,
-            onHome: () => setState(() => _tab = _dashboard),
+            onHome: () => _go(_dashboard),
           );
           return narrow
               ? Column(children: [rail, Expanded(child: content)])

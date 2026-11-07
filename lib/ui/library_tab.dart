@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/models.dart';
 import '../providers/providers.dart';
+import '../services/database.dart';
 import '../services/playlist_backend.dart';
 import 'player_screen.dart';
 import 'theme.dart';
@@ -34,15 +35,28 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
   SeriesItem? _series;
 
   bool get _isSeries => widget.kind == CategoryKind.series;
+  String get _savedCategory => 'category_${widget.kind.name}';
+
+  @override
+  void initState() {
+    super.initState();
+    ref.read(databaseProvider).setting(_savedCategory).then((id) {
+      if (mounted && id != null) setState(() => _picked ??= id);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final kind = widget.kind;
     final title = _isSeries ? 'Series' : 'Movies';
     final categories = ref.watch(categoriesProvider(kind)).value ?? const [];
-    final categoryId = _picked ?? categories.firstOrNull?.id;
+    final categoryId = pickCategory(_picked, categories);
     final rows = ref.watch(browseProvider(
         (kind: kind, categoryId: categoryId, search: _search)));
+    final favorites = ref.watch(favoriteTitlesProvider(kind)).value ?? const {};
+    void toggle(String id) => ref
+        .read(databaseProvider)
+        .setFavoriteTitle(id, kind, !favorites.contains(id));
 
     return LayoutBuilder(builder: (context, constraints) {
       final panel = _isSeries && constraints.maxWidth >= 1100;
@@ -83,13 +97,19 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
             CategoryChips(
               kind: kind,
               value: categoryId,
-              onChanged: (id) => setState(() => _picked = id),
+              includeFavorites: true,
+              onChanged: (id) {
+                setState(() => _picked = id);
+                ref.read(databaseProvider).saveSetting(_savedCategory, id);
+              },
             ),
             const SizedBox(height: 20),
             Expanded(
               child: switch (rows) {
-                AsyncData(:final value) when value.isEmpty => const EmptyMessage(
-                    'Nothing here yet. Add a source in Sources.'),
+                AsyncData(:final value) when value.isEmpty => EmptyMessage(
+                    categoryId == favoritesCategoryId
+                        ? 'No favorites yet. Use the star on a poster.'
+                        : 'Nothing here yet. Add a source in Sources.'),
                 AsyncData(:final value) => GridView.builder(
                     gridDelegate:
                         const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -105,6 +125,9 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
                           url: v.posterUrl,
                           year: v.year,
                           rating: v.rating,
+                          tv: false,
+                          favorite: favorites.contains(v.id),
+                          onFavorite: () => toggle(v.id),
                           onTap: () => openVod(context, ref, v),
                         ),
                       SeriesItem s => PosterCard(
@@ -113,6 +136,9 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
                           year: s.year,
                           rating: s.rating,
                           selected: panel && s.id == series?.id,
+                          tv: true,
+                          favorite: favorites.contains(s.id),
+                          onFavorite: () => toggle(s.id),
                           onTap: () => openSeries(s),
                         ),
                       _ => const SizedBox.shrink(),
@@ -144,7 +170,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
   }
 }
 
-class PosterCard extends StatelessWidget {
+class PosterCard extends ConsumerWidget {
   const PosterCard({
     super.key,
     required this.title,
@@ -154,6 +180,10 @@ class PosterCard extends StatelessWidget {
     required this.onTap,
     this.selected = false,
     this.progress,
+    this.tv,
+    this.favorite = false,
+    this.onFavorite,
+    this.onRemove,
   });
 
   final String title;
@@ -166,8 +196,24 @@ class PosterCard extends StatelessWidget {
   /// 0 to 1, for something partly watched.
   final double? progress;
 
+  /// Whether this is a series or a movie, for finding missing artwork. Null
+  /// when the title alone would not find it, as with an episode.
+  final bool? tv;
+
+  final bool favorite;
+  final VoidCallback? onFavorite;
+  final VoidCallback? onRemove;
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final kind = tv;
+    final art = url ??
+        (kind == null
+            ? null
+            : ref
+                .watch(fallbackPosterProvider(
+                    (title: title, year: year, tv: kind)))
+                .value);
     return InkWell(
       borderRadius: BorderRadius.circular(12),
       onTap: onTap,
@@ -175,11 +221,31 @@ class PosterCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: Poster(
-              title: title,
-              url: url,
-              rating: rating,
-              selected: selected,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Poster(
+                  title: title,
+                  url: art,
+                  rating: rating,
+                  selected: selected,
+                ),
+                if (onFavorite case final toggle?)
+                  _PosterButton(
+                    tooltip:
+                        favorite ? 'Remove from favorites' : 'Add to favorites',
+                    icon: favorite
+                        ? Icons.star_rounded
+                        : Icons.star_outline_rounded,
+                    onPressed: toggle,
+                  ),
+                if (onRemove case final remove?)
+                  _PosterButton(
+                    tooltip: 'Remove from Keep watching',
+                    icon: Icons.close,
+                    onPressed: remove,
+                  ),
+              ],
             ),
           ),
           if (progress case final value?) ...[
@@ -208,6 +274,34 @@ class PosterCard extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _PosterButton extends StatelessWidget {
+  const _PosterButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.topLeft,
+      child: Padding(
+        padding: const EdgeInsets.all(6),
+        child: IconButton(
+          tooltip: tooltip,
+          onPressed: onPressed,
+          style: IconButton.styleFrom(backgroundColor: OnAir.ground),
+          icon: Icon(icon, size: 20, color: OnAir.accent),
+        ),
       ),
     );
   }
@@ -351,7 +445,7 @@ class _EpisodePanelState extends ConsumerState<_EpisodePanel> {
                 child: Material(
                   type: MaterialType.transparency,
                   child: InkWell(
-                    onTap: () => _play(e),
+                    onTap: () => _play(e, episodes),
                     child: Row(
                       children: [
                         SizedBox(
@@ -391,11 +485,18 @@ class _EpisodePanelState extends ConsumerState<_EpisodePanel> {
     );
   }
 
-  void _play(Episode episode) {
+  void _play(Episode episode, List<Episode> episodes) {
+    final ordered = [...episodes]..sort((a, b) => a.season != b.season
+        ? a.season.compareTo(b.season)
+        : a.number.compareTo(b.number));
+    final upNext = ordered
+        .skip(ordered.indexOf(episode) + 1)
+        .map((e) => e.item)
+        .toList();
     // Inside a bottom sheet, close it first so the player opens on top.
     final route = ModalRoute.of(context);
     final navigator = Navigator.of(context);
     if (route is ModalBottomSheetRoute) navigator.pop();
-    openVod(navigator.context, ref, episode.item);
+    openVod(navigator.context, ref, episode.item, upNext: upNext);
   }
 }

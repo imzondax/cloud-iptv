@@ -88,6 +88,37 @@ class TmdbClient {
   }
 }
 
+/// A poster for one title, for catalogs that came without artwork.
+Future<String?> searchTmdbPoster(Dio dio, String key,
+    {required String title, int? year, required bool tv}) async {
+  final token = key.contains('.');
+  final response = await dio.get<Map<String, dynamic>>(
+    'https://api.themoviedb.org/3/search/${tv ? 'tv' : 'movie'}',
+    queryParameters: {
+      'query': title,
+      if (year != null) (tv ? 'first_air_date_year' : 'year'): '$year',
+      if (!token) 'api_key': key,
+    },
+    options: Options(headers: {if (token) 'Authorization': 'Bearer $key'}),
+  );
+  final results = response.data?['results'];
+  if (results is! List) return null;
+  for (final r in results.whereType<Map<String, dynamic>>()) {
+    final path = r['poster_path'];
+    if (path is String) return 'https://image.tmdb.org/t/p/w342$path';
+  }
+  return null;
+}
+
+/// The title a search should use: the provider's, without its tags.
+String searchableTitle(String raw) {
+  var t = raw.trim();
+  while (_tagPrefix.hasMatch(t)) {
+    t = t.replaceFirst(_tagPrefix, '');
+  }
+  return t.replaceAll(_bracketed, ' ').replaceFirst(_qualitySuffix, '').trim();
+}
+
 String encodeTmdbLists(List<TmdbList> lists) => jsonEncode([
       for (final l in lists)
         {

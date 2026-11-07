@@ -8,11 +8,81 @@ import 'player_screen.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
-class DashboardTab extends ConsumerWidget {
+class DashboardTab extends ConsumerStatefulWidget {
   const DashboardTab({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DashboardTab> createState() => _DashboardTabState();
+}
+
+class _DashboardTabState extends ConsumerState<DashboardTab> {
+  String _search = '';
+
+  Widget _titleCard(Object item) => SizedBox(
+        width: 170,
+        child: switch (item) {
+          VodItem m => PosterCard(
+              title: m.title,
+              url: m.posterUrl,
+              year: m.year,
+              rating: m.rating,
+              tv: false,
+              onTap: () => openVod(context, ref, m),
+            ),
+          SeriesItem s => PosterCard(
+              title: s.title,
+              url: s.posterUrl,
+              year: s.year,
+              rating: s.rating,
+              tv: true,
+              onTap: () => showEpisodes(context, s),
+            ),
+          _ => const SizedBox.shrink(),
+        },
+      );
+
+  Widget _titles(String title, List<Object> items) => _Shelf(
+        key: ValueKey(title),
+        title: title,
+        height: 300,
+        count: items.length,
+        builder: (context, i) => _titleCard(items[i]),
+      );
+
+  List<Widget> _results() {
+    List<Object> find(CategoryKind kind) =>
+        ref
+            .watch(browseProvider(
+                (kind: kind, categoryId: null, search: _search)))
+            .value ??
+        const [];
+    final channels = find(CategoryKind.live).cast<PlaylistChannel>().toList();
+    final movies = find(CategoryKind.vod);
+    final series = find(CategoryKind.series);
+    if (channels.isEmpty && movies.isEmpty && series.isEmpty) {
+      return [const EmptyMessage('Nothing matches your search')];
+    }
+    return [
+      if (channels.isNotEmpty) _liveShelf('Channels', channels),
+      if (movies.isNotEmpty) _titles('Movies', movies),
+      if (series.isNotEmpty) _titles('Series', series),
+    ];
+  }
+
+  Widget _liveShelf(String title, List<PlaylistChannel> channels) => _Shelf(
+        key: ValueKey(title),
+        title: title,
+        height: 92,
+        count: channels.length,
+        builder: (context, i) => _LiveCard(
+          channel: channels[i],
+          onTap: () =>
+              openChannel(context, ref, channels[i], playlist: channels),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
     final keepWatching = ref.watch(keepWatchingProvider).value ?? const [];
     final recent =
         ref.watch(recentChannelsProvider).value ?? const <PlaylistChannel>[];
@@ -35,130 +105,65 @@ class DashboardTab extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(32, 28, 32, 28),
       children: [
-        Text('Home', style: heading(28)),
-        if (keepWatching.isNotEmpty)
-          _Shelf(
-            key: const ValueKey('Keep watching'),
-            title: 'Keep watching',
-            height: 310,
-            count: keepWatching.length,
-            builder: (context, i) {
-              final p = keepWatching[i];
-              return SizedBox(
-                width: 170,
-                child: PosterCard(
-                  title: p.title,
-                  url: p.posterUrl,
-                  year: null,
-                  rating: null,
-                  progress: p.positionMs / p.durationMs,
-                  onTap: () => openVod(
-                    context,
-                    ref,
-                    VodItem(
-                      id: p.itemId,
-                      sourceId: p.sourceId,
-                      title: p.title,
-                      posterUrl: p.posterUrl,
-                      streamUrl: p.streamUrl,
-                      categoryId: '',
-                      sortOrder: 0,
+        Row(
+          children: [
+            Expanded(child: Text('Home', style: heading(28))),
+            const SizedBox(width: 16),
+            Flexible(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 360),
+                child: SearchField(
+                  hint: 'Search everything',
+                  onChanged: (v) => setState(() => _search = v),
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (_search.isNotEmpty)
+          ..._results()
+        else ...[
+          if (keepWatching.isNotEmpty)
+            _Shelf(
+              key: const ValueKey('Keep watching'),
+              title: 'Keep watching',
+              height: 310,
+              count: keepWatching.length,
+              builder: (context, i) {
+                final p = keepWatching[i];
+                return SizedBox(
+                  width: 170,
+                  child: PosterCard(
+                    title: p.title,
+                    url: p.posterUrl,
+                    year: null,
+                    rating: null,
+                    progress: p.positionMs / p.durationMs,
+                    onRemove: () =>
+                        ref.read(databaseProvider).clearProgress(p.itemId),
+                    onTap: () => openVod(
+                      context,
+                      ref,
+                      VodItem(
+                        id: p.itemId,
+                        sourceId: p.sourceId,
+                        title: p.title,
+                        posterUrl: p.posterUrl,
+                        streamUrl: p.streamUrl,
+                        categoryId: '',
+                        sortOrder: 0,
+                      ),
                     ),
                   ),
-                ),
-              );
-            },
-          ),
-        if (recent.isNotEmpty)
-          _Shelf(
-            key: const ValueKey('Recently watched'),
-            title: 'Recently watched',
-            height: 92,
-            count: recent.length,
-            builder: (context, i) => _LiveCard(
-              channel: recent[i],
-              onTap: () =>
-                  openChannel(context, ref, recent[i], playlist: recent),
-            ),
-          ),
-        if (live.isNotEmpty)
-          _Shelf(
-            key: const ValueKey('Live now'),
-            title: 'Live now',
-            height: 92,
-            count: live.length,
-            builder: (context, i) => _LiveCard(
-              channel: live[i],
-              onTap: () => openChannel(context, ref, live[i], playlist: live),
-            ),
-          ),
-        for (final shelf in curated)
-          _Shelf(
-            key: ValueKey(shelf.name),
-            title: shelf.name,
-            height: 300,
-            count: shelf.items.length,
-            builder: (context, i) => SizedBox(
-              width: 170,
-              child: switch (shelf.items[i]) {
-                VodItem m => PosterCard(
-                    title: m.title,
-                    url: m.posterUrl,
-                    year: m.year,
-                    rating: m.rating,
-                    onTap: () => openVod(context, ref, m),
-                  ),
-                SeriesItem s => PosterCard(
-                    title: s.title,
-                    url: s.posterUrl,
-                    year: s.year,
-                    rating: s.rating,
-                    onTap: () => showEpisodes(context, s),
-                  ),
-                _ => const SizedBox.shrink(),
+                );
               },
             ),
-          ),
-        if (movies.isNotEmpty)
-          _Shelf(
-            key: const ValueKey('Top movies'),
-            title: 'Top movies',
-            height: 300,
-            count: movies.length,
-            builder: (context, i) {
-              final m = movies[i];
-              return SizedBox(
-                width: 170,
-                child: PosterCard(
-                  title: m.title,
-                  url: m.posterUrl,
-                  year: m.year,
-                  rating: m.rating,
-                  onTap: () => openVod(context, ref, m),
-                ),
-              );
-            },
-          ),
-        if (series.isNotEmpty)
-          _Shelf(
-            key: const ValueKey('Top series'),
-            title: 'Top series',
-            height: 300,
-            count: series.length,
-            builder: (context, i) {
-              final s = series[i];
-              return SizedBox(
-                width: 170,
-                child: PosterCard(
-                  title: s.title,
-                  url: s.posterUrl,
-                  year: s.year,
-                  rating: s.rating,
-                  onTap: () => showEpisodes(context, s),
-                ),
-              );
-            },
-          ),
+          if (recent.isNotEmpty) _liveShelf('Recently watched', recent),
+          if (live.isNotEmpty) _liveShelf('Live now', live),
+          for (final shelf in curated) _titles(shelf.name, shelf.items),
+          if (movies.isNotEmpty) _titles('Top movies', movies),
+          if (series.isNotEmpty) _titles('Top series', series),
+        ],
       ],
     );
   }

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -22,13 +23,24 @@ Future<void> openChannel(
   return _push(context);
 }
 
-Future<void> openVod(BuildContext context, WidgetRef ref, VodItem item) {
-  ref.read(activeStreamProvider.notifier).playVod(item);
+Future<void> openVod(BuildContext context, WidgetRef ref, VodItem item,
+    {List<VodItem> upNext = const []}) {
+  ref.read(activeStreamProvider.notifier).playVod(item, upNext: upNext);
+  return _push(context);
+}
+
+Future<void> openCatchUp(BuildContext context, WidgetRef ref,
+    PlaylistChannel channel, EpgProgram program) {
+  ref.read(activeStreamProvider.notifier).playCatchUp(channel, program);
   return _push(context);
 }
 
 Future<void> _push(BuildContext context) => Navigator.of(context).push(
     MaterialPageRoute(builder: (_) => const PlayerScreen()));
+
+/// The volume after one wheel notch. A positive [scrollY] is scrolling down.
+double nextVolume(double volume, double scrollY) =>
+    (volume + (scrollY < 0 ? 5 : -5)).clamp(0.0, 100.0);
 
 /// `h:mm:ss`, or `m:ss` under an hour.
 String formatPosition(Duration d) {
@@ -55,18 +67,28 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   Timer? _hideTimer;
   bool _controls = true;
   bool _drawer = false;
+  late final _db = ref.read(databaseProvider);
   bool _fullscreen = false;
+  double? _volume;
+  double? _unmuteTo;
+  Timer? _saveVolume;
+  PictureSize _picture = PictureSize.contain;
+  Timer? _sleep;
+  int _sleepMinutes = 0;
+  String? _upNextCancelledFor;
 
   @override
   void initState() {
     super.initState();
     _active;
+    _db;
     _wake();
   }
 
   @override
   void dispose() {
     _hideTimer?.cancel();
+    _sleep?.cancel();
     if (_fullscreen) defaultExitNativeFullscreen();
     // Providers may not change while the tree is being torn down.
     Future.microtask(_active.stop);
@@ -100,18 +122,62 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _wake();
   }
 
+  void _onPointerSignal(PointerSignalEvent event, Player? mpv) {
+    if (event is! PointerScrollEvent || mpv == null) return;
+    // Through the resolver, so the channel list keeps its wheel when hovered.
+    GestureBinding.instance.pointerSignalResolver.register(event, (_) {
+      // Not from mpv's state, which lags behind a fast spin of the wheel.
+      _setVolume(
+          mpv, nextVolume(_volume ?? mpv.state.volume, event.scrollDelta.dy));
+      _wake();
+    });
+  }
+
+  void _setVolume(Player mpv, double volume) {
+    _volume = volume;
+    mpv.setVolume(volume);
+    // Left running past dispose, so leaving right after a change still saves.
+    _saveVolume?.cancel();
+    _saveVolume = Timer(const Duration(milliseconds: 500),
+        () => _db.saveSetting(volumeKey, '$volume'));
+  }
+
+  void _toggleMute(Player mpv) {
+    final volume = _volume ?? mpv.state.volume;
+    if (volume > 0) _unmuteTo = volume;
+    _setVolume(mpv, volume > 0 ? 0 : _unmuteTo ?? 100);
+    _wake();
+  }
+
+  void _skip(Player mpv, int seconds) {
+    final target = mpv.state.position + Duration(seconds: seconds);
+    mpv.seek(target < Duration.zero ? Duration.zero : target);
+    _wake();
+  }
+
+  void _setSleep(int minutes) {
+    _sleep?.cancel();
+    setState(() => _sleepMinutes = minutes);
+    if (minutes == 0) return;
+    _sleep = Timer(Duration(minutes: minutes), () {
+      if (mounted) Navigator.of(context).maybePop();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final playing = ref.watch(activeStreamProvider);
     final player = ref.watch(playerProvider);
     final channel = playing?.channel;
     final canStep = (playing?.playlist.length ?? 0) > 1;
+    final mpv = player.value?.player;
+    final upNext = playing?.upNext ?? const <VodItem>[];
 
     final Widget body = switch (player) {
       AsyncData(:final value) => Stack(
           fit: StackFit.expand,
           children: [
-            IptvPlayerView(player: value),
+            IptvPlayerView(player: value, picture: _picture),
             _Fade(
               visible: _controls,
               child: Column(
@@ -130,6 +196,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     drawerOpen: _drawer,
                     fullscreen: _fullscreen,
                     onStep: _step,
+                    onVolume: (v) => _setVolume(value.player, v),
+                    extras: [
+                      _PictureButton(
+                        value: _picture,
+                        onChanged: (p) => setState(() => _picture = p),
+                      ),
+                      _SleepButton(minutes: _sleepMinutes, onChanged: _setSleep),
+                    ],
                     onDrawer: () => setState(() {
                       _drawer = !_drawer;
                       _wake();
@@ -148,6 +222,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   onPick: (c) => _active.playChannel(c),
                 ),
               ),
+            if (upNext.isNotEmpty && _upNextCancelledFor != playing?.title)
+              StreamBuilder(
+                stream: value.player.stream.completed,
+                initialData: value.player.state.completed,
+                builder: (context, snapshot) => snapshot.data ?? false
+                    ? Align(
+                        alignment: Alignment.bottomRight,
+                        child: _UpNext(
+                          key: ValueKey(upNext.first.id),
+                          title: upNext.first.title,
+                          onPlay: _active.playNext,
+                          onCancel: () => setState(
+                              () => _upNextCancelledFor = playing?.title),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
             ValueListenableBuilder(
               valueListenable: value.failed,
               builder: (context, failed, _) => failed
@@ -159,9 +250,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             ),
           ],
         ),
-      AsyncError() =>
-        const EmptyMessage('Could not start the player'),
-      _ => const Center(child: CircularProgressIndicator()),
+      AsyncError() => _Starting(
+          onBack: () => Navigator.of(context).maybePop(),
+          child: const EmptyMessage('Could not start the player'),
+        ),
+      _ => _Starting(
+          onBack: () => Navigator.of(context).maybePop(),
+          child: const Center(child: CircularProgressIndicator()),
+        ),
     };
 
     return Scaffold(
@@ -178,23 +274,38 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             const SingleActivator(LogicalKeyboardKey.arrowUp): () => _step(-1),
             const SingleActivator(LogicalKeyboardKey.arrowDown): () => _step(1),
           },
+          if (mpv != null)
+            const SingleActivator(LogicalKeyboardKey.keyM): () =>
+                _toggleMute(mpv),
+          if (channel != null)
+            const SingleActivator(LogicalKeyboardKey.backspace):
+                _active.lastChannel,
+          if (channel == null && mpv != null) ...{
+            const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
+                _skip(mpv, -10),
+            const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
+                _skip(mpv, 10),
+          },
         },
         child: Focus(
           autofocus: true,
-          child: MouseRegion(
-            cursor: _controls ? MouseCursor.defer : SystemMouseCursors.none,
-            onHover: (_) => _wake(),
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                if (_controls) {
-                  setState(() => _controls = false);
-                } else {
-                  _wake();
-                }
-              },
-              onDoubleTap: _toggleFullscreen,
-              child: body,
+          child: Listener(
+            onPointerSignal: (e) => _onPointerSignal(e, player.value?.player),
+            child: MouseRegion(
+              cursor: _controls ? MouseCursor.defer : SystemMouseCursors.none,
+              onHover: (_) => _wake(),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  if (_controls) {
+                    setState(() => _controls = false);
+                  } else {
+                    _wake();
+                  }
+                },
+                onDoubleTap: _toggleFullscreen,
+                child: body,
+              ),
             ),
           ),
         ),
@@ -323,6 +434,8 @@ class _BottomBar extends StatelessWidget {
     required this.drawerOpen,
     required this.fullscreen,
     required this.onStep,
+    required this.onVolume,
+    required this.extras,
     required this.onDrawer,
     required this.onFullscreen,
   });
@@ -333,6 +446,8 @@ class _BottomBar extends StatelessWidget {
   final bool drawerOpen;
   final bool fullscreen;
   final ValueChanged<int> onStep;
+  final ValueChanged<double> onVolume;
+  final List<Widget> extras;
   final VoidCallback onDrawer;
   final VoidCallback onFullscreen;
 
@@ -407,14 +522,20 @@ class _BottomBar extends StatelessWidget {
                   if (live) ...[
                     const SizedBox(width: 10),
                     const LivePill(),
-                  ],
+                  ] else
+                    _RoundButton(
+                      tooltip: 'Start over',
+                      icon: Icons.replay,
+                      onPressed: () => mpv.seek(Duration.zero),
+                    ),
                 ],
               ),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _Volume(player: mpv),
+                  _Volume(player: mpv, onChanged: onVolume),
                   _TracksButton(player: mpv),
+                  ...extras,
                   if (canStep)
                     _RoundButton(
                       tooltip: 'Channel list',
@@ -522,9 +643,10 @@ class _SeekBarState extends State<_SeekBar> {
 }
 
 class _Volume extends StatelessWidget {
-  const _Volume({required this.player});
+  const _Volume({required this.player, required this.onChanged});
 
   final Player player;
+  final ValueChanged<double> onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -544,7 +666,7 @@ class _Volume extends StatelessWidget {
                 semanticFormatterCallback: (v) => 'Volume ${v.round()}%',
                 value: volume,
                 max: 100,
-                onChanged: player.setVolume,
+                onChanged: onChanged,
               ),
             ),
           ],
@@ -595,6 +717,158 @@ class _TracksButton extends StatelessWidget {
             ),
         ];
       },
+    );
+  }
+}
+
+class _PictureButton extends StatelessWidget {
+  const _PictureButton({required this.value, required this.onChanged});
+
+  final PictureSize value;
+  final ValueChanged<PictureSize> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<PictureSize>(
+      tooltip: 'Picture size',
+      onSelected: onChanged,
+      icon: const Icon(Icons.aspect_ratio, color: Colors.white),
+      itemBuilder: (context) => [
+        for (final p in PictureSize.values)
+          CheckedPopupMenuItem(
+              value: p, checked: p == value, child: Text(p.label)),
+      ],
+    );
+  }
+}
+
+class _SleepButton extends StatelessWidget {
+  const _SleepButton({required this.minutes, required this.onChanged});
+
+  final int minutes;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<int>(
+      tooltip: 'Sleep timer',
+      onSelected: onChanged,
+      icon: Icon(Icons.bedtime_outlined,
+          color: minutes > 0 ? OnAir.accent : Colors.white),
+      itemBuilder: (context) => [
+        for (final m in const [0, 15, 30, 60, 90])
+          CheckedPopupMenuItem(
+            value: m,
+            checked: m == minutes,
+            child: Text(m == 0 ? 'Off' : '$m minutes'),
+          ),
+      ],
+    );
+  }
+}
+
+/// Counts down to the next episode once one has finished.
+class _UpNext extends StatefulWidget {
+  const _UpNext({
+    super.key,
+    required this.title,
+    required this.onPlay,
+    required this.onCancel,
+  });
+
+  final String title;
+  final VoidCallback onPlay;
+  final VoidCallback onCancel;
+
+  @override
+  State<_UpNext> createState() => _UpNextState();
+}
+
+class _UpNextState extends State<_UpNext> {
+  int _left = 8;
+  late final Timer _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+    if (_left > 1) {
+      setState(() => _left--);
+    } else {
+      t.cancel();
+      widget.onPlay();
+    }
+  });
+
+  @override
+  void initState() {
+    super.initState();
+    _timer;
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 340,
+      margin: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: OnAir.panel,
+        border: Border.all(color: OnAir.line),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Up next in $_left',
+              style: const TextStyle(fontSize: 13, color: OnAir.muted)),
+          const SizedBox(height: 4),
+          Text(widget.title,
+              maxLines: 2, overflow: TextOverflow.ellipsis, style: heading(18)),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                  onPressed: widget.onCancel, child: const Text('Cancel')),
+              const SizedBox(width: 8),
+              FilledButton(
+                  onPressed: widget.onPlay, child: const Text('Play now')),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A way out while the player itself is not there yet.
+class _Starting extends StatelessWidget {
+  const _Starting({required this.onBack, required this.child});
+
+  final VoidCallback onBack;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        child,
+        Align(
+          alignment: Alignment.topLeft,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 0, 0),
+            child: IconButton(
+              tooltip: 'Back',
+              onPressed: onBack,
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

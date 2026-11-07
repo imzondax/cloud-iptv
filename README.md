@@ -1,7 +1,8 @@
 # Cloud IPTV
 
-IPTV player built with Flutter. Windows is the tested platform; Linux, Android
-and iOS are in development. Flutter,
+IPTV player built with Flutter. Windows is the tested platform, Linux builds
+are available but less tested, and Android and iOS are in development.
+Downloads are on the [releases page](https://github.com/imzondax/cloud-iptv/releases/latest). Flutter,
 `media_kit` (libmpv), drift (SQLite) and Riverpod. Supports M3U playlists,
 Xtream Codes and XMLTV guides.
 
@@ -60,5 +61,7 @@ code. The third-party files listed under Credits keep their own licenses.
 - This product uses the TMDB API but is not endorsed or certified by TMDB.
 - Inter and Space Grotesk are licensed under the SIL Open Font License; see
   `assets/fonts/`.
+- Windows builds include libmpv and FFmpeg, licensed under the GNU LGPL v3.
+  Sources are linked from each release.
 - `integration_test/fixtures/sample.ts` is an excerpt of Big Buck Bunny,
   (c) Blender Foundation, licensed under CC BY 3.0, https://peach.blender.org.

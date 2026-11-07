@@ -239,6 +239,9 @@ PlaylistData parseXtreamCatalog(XtreamCatalogJob job) {
         tvgId: _str(s['epg_channel_id']),
         backendType: BackendType.xtream,
         sortOrder: channels.length,
+        archiveDays: _str(s['tv_archive']) == '1'
+            ? int.tryParse(_str(s['tv_archive_duration']) ?? '') ?? 0
+            : 0,
       ));
     }
   }
@@ -325,6 +328,28 @@ List<EpgProgram> parseShortEpg(String body, String channelKey) {
     ));
   }
   return out;
+}
+
+/// Whether [program] can be replayed from the provider's archive.
+bool canCatchUp(PlaylistChannel channel, EpgProgram program, DateTime now) =>
+    channel.archiveDays > 0 &&
+    !program.stopTime.isAfter(now) &&
+    program.startTime
+        .isAfter(now.subtract(Duration(days: channel.archiveDays)));
+
+/// The archive URL for [program].
+// shortcut: uses this device's time zone, but panels read the time in their
+// own. If replays start at the wrong moment, use server_info.timezone instead.
+String? catchUpUrl(PlaylistChannel channel, EpgProgram program) {
+  final live = RegExp(r'^(.*)/live/([^/]+)/([^/]+)/(\d+)\.\w+$')
+      .firstMatch(channel.streamUrl);
+  if (live == null) return null;
+  String two(int n) => n.toString().padLeft(2, '0');
+  final t = program.startTime.toLocal();
+  final start =
+      '${t.year}-${two(t.month)}-${two(t.day)}:${two(t.hour)}-${two(t.minute)}';
+  final minutes = program.stopTime.difference(program.startTime).inMinutes;
+  return '${live[1]}/timeshift/${live[2]}/${live[3]}/$minutes/$start/${live[4]}.ts';
 }
 
 List<Episode> parseEpisodes(String body, SeriesItem series, String baseUrl,
