@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloud IPTV</title>
+<meta name="description" content="A fast, modern player for your own live TV, movies and series, from M3U playlists and Xtream Codes accounts.">
+<link rel="icon" href="images/logo.png">
+<style>
+@font-face { font-family: Inter; font-weight: 400; src: url(fonts/Inter-400.ttf); font-display: swap; }
+@font-face { font-family: Inter; font-weight: 600; src: url(fonts/Inter-600.ttf); font-display: swap; }
+@font-face { font-family: "Space Grotesk"; font-weight: 600; src: url(fonts/SpaceGrotesk-600.ttf); font-display: swap; }
+:root {
+  --ground: #0E1116; --panel: #151A21; --line: #2B323D;
+  --text: #F0F2F5; --body: #C7CED8; --muted: #A3ADBA; --accent: #FFB224;
+}
+* { box-sizing: border-box; }
+html { background: var(--ground); }
+body { margin: 0; background: var(--ground); color: var(--body); font: 400 17px/1.6 Inter, system-ui, sans-serif; }
+main, footer { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+h1, h2, h3 { font-family: "Space Grotesk", Inter, sans-serif; font-weight: 600; color: var(--text); line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(38px, 7vw, 60px); max-width: 15ch; }
+h2 { font-size: 30px; margin-bottom: 24px; }
+h3 { font-size: 19px; margin-bottom: 8px; }
+img { display: block; max-width: 100%; height: auto; }
+section { padding: 56px 0; }
+.brand { display: flex; align-items: center; gap: 12px; padding: 28px 0 0; color: var(--text); font: 600 20px "Space Grotesk", Inter, sans-serif; }
+.brand img { width: 44px; }
+.hero { padding: 64px 0 40px; }
+.lead { font-size: 20px; max-width: 58ch; margin: 20px 0 0; }
+.shot { border: 1px solid var(--line); border-radius: 14px; }
+.hero .shot { margin-top: 44px; }
+.features { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; }
+.features div { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+.features p { margin: 0; font-size: 16px; }
+.gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 24px; }
+figure { margin: 0; }
+figcaption { margin-top: 10px; font-size: 15px; color: var(--muted); }
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 32px; }
+.notes p { margin: 0; }
+footer { border-top: 1px solid var(--line); padding-top: 24px; padding-bottom: 40px; font-size: 14px; color: var(--muted); }
+footer p { margin: 0 0 8px; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand"><img src="images/logo.png" alt="" width="256" height="256">Cloud IPTV</div>
+
+  <div class="hero">
+    <h1>All your TV in one calm, fast place.</h1>
+    <p class="lead">Cloud IPTV is a player for the live TV, movies and series you already have, from your own M3U playlists and Xtream Codes accounts.</p>
+    <img class="shot" src="images/home.png" alt="The Home screen with rows for live channels, top movies and top series" width="1440" height="900">
+  </div>
+
+  <section>
+    <h2>What it does</h2>
+    <div class="features">
+      <div><h3>Opens instantly</h3><p>Your library loads from a local cache, and updates happen quietly in the background.</p></div>
+      <div><h3>Pick up where you left off</h3><p>Keep watching resumes movies and episodes, and recently watched brings back your channels.</p></div>
+      <div><h3>Lists worth browsing</h3><p>Trending and top rated lists from TMDB, showing only titles you can actually play.</p></div>
+      <div><h3>A proper TV guide</h3><p>See what's on now and next across your channels, with a live timeline.</p></div>
+      <div><h3>Stays on air</h3><p>Reconnects by itself and switches to backup streams when a channel drops.</p></div>
+      <div><h3>Tuned to your connection</h3><p>Hardware decoding, plus a buffer setting that favours fast channel changes or a steadier picture.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>A look around</h2>
+    <div class="gallery">
+      <figure><img class="shot" src="images/live.png" alt="Live TV with categories, channels and a preview" width="1440" height="900" loading="lazy"><figcaption>Live TV</figcaption></figure>
+      <figure><img class="shot" src="images/guide.png" alt="The programme guide timeline" width="1440" height="900" loading="lazy"><figcaption>Guide</figcaption></figure>
+      <figure><img class="shot" src="images/series.png" alt="A series with its seasons and episodes" width="1440" height="900" loading="lazy"><figcaption>Series</figcaption></figure>
+      <figure><img class="shot" src="images/sources.png" alt="Source and playback settings" width="1440" height="900" loading="lazy"><figcaption>Sources</figcaption></figure>
+    </div>
+    <p><small>Screenshots use made-up sample data.</small></p>
+  </section>
+
+  <section>
+    <h2>Good to know</h2>
+    <div class="notes">
+      <div><h3>Bring your own content</h3><p>Cloud IPTV is only a player. It doesn't include, host or sell any channels or video. You add sources you have the right to use.</p></div>
+      <div><h3>Your data stays with you</h3><p>Logins, favourites and watch history are stored on your device. There are no accounts, ads or tracking.</p></div>
+      <div><h3>Platforms</h3><p>Windows is the main platform today. Linux, Android and iOS versions are in development.</p></div>
+    </div>
+  </section>
+</main>
+<footer>
+  <p>This product uses the TMDB API but is not endorsed or certified by TMDB. Movie and series lists are provided by <a href="https://www.themoviedb.org">The Movie Database</a>.</p>
+  <p>Cloud IPTV is a personal, non-commercial project.</p>
+</footer>
+</body>
+</html>
