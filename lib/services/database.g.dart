@@ -2730,6 +2730,17 @@ class $WatchProgressTable extends WatchProgress
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _categoryIdMeta = const VerificationMeta(
+    'categoryId',
+  );
+  @override
+  late final GeneratedColumn<String> categoryId = GeneratedColumn<String>(
+    'category_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _positionMsMeta = const VerificationMeta(
     'positionMs',
   );
@@ -2770,6 +2781,7 @@ class $WatchProgressTable extends WatchProgress
     title,
     posterUrl,
     streamUrl,
+    categoryId,
     positionMs,
     durationMs,
     updatedAt,
@@ -2824,6 +2836,12 @@ class $WatchProgressTable extends WatchProgress
     } else if (isInserting) {
       context.missing(_streamUrlMeta);
     }
+    if (data.containsKey('category_id')) {
+      context.handle(
+        _categoryIdMeta,
+        categoryId.isAcceptableOrUnknown(data['category_id']!, _categoryIdMeta),
+      );
+    }
     if (data.containsKey('position_ms')) {
       context.handle(
         _positionMsMeta,
@@ -2877,6 +2895,10 @@ class $WatchProgressTable extends WatchProgress
         DriftSqlType.string,
         data['${effectivePrefix}stream_url'],
       )!,
+      categoryId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}category_id'],
+      ),
       positionMs: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}position_ms'],
@@ -2905,6 +2927,7 @@ class WatchProgressData extends DataClass
   final String title;
   final String? posterUrl;
   final String streamUrl;
+  final String? categoryId;
   final int positionMs;
   final int durationMs;
   final DateTime updatedAt;
@@ -2914,6 +2937,7 @@ class WatchProgressData extends DataClass
     required this.title,
     this.posterUrl,
     required this.streamUrl,
+    this.categoryId,
     required this.positionMs,
     required this.durationMs,
     required this.updatedAt,
@@ -2928,6 +2952,9 @@ class WatchProgressData extends DataClass
       map['poster_url'] = Variable<String>(posterUrl);
     }
     map['stream_url'] = Variable<String>(streamUrl);
+    if (!nullToAbsent || categoryId != null) {
+      map['category_id'] = Variable<String>(categoryId);
+    }
     map['position_ms'] = Variable<int>(positionMs);
     map['duration_ms'] = Variable<int>(durationMs);
     map['updated_at'] = Variable<DateTime>(updatedAt);
@@ -2943,6 +2970,9 @@ class WatchProgressData extends DataClass
           ? const Value.absent()
           : Value(posterUrl),
       streamUrl: Value(streamUrl),
+      categoryId: categoryId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(categoryId),
       positionMs: Value(positionMs),
       durationMs: Value(durationMs),
       updatedAt: Value(updatedAt),
@@ -2960,6 +2990,7 @@ class WatchProgressData extends DataClass
       title: serializer.fromJson<String>(json['title']),
       posterUrl: serializer.fromJson<String?>(json['posterUrl']),
       streamUrl: serializer.fromJson<String>(json['streamUrl']),
+      categoryId: serializer.fromJson<String?>(json['categoryId']),
       positionMs: serializer.fromJson<int>(json['positionMs']),
       durationMs: serializer.fromJson<int>(json['durationMs']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
@@ -2974,6 +3005,7 @@ class WatchProgressData extends DataClass
       'title': serializer.toJson<String>(title),
       'posterUrl': serializer.toJson<String?>(posterUrl),
       'streamUrl': serializer.toJson<String>(streamUrl),
+      'categoryId': serializer.toJson<String?>(categoryId),
       'positionMs': serializer.toJson<int>(positionMs),
       'durationMs': serializer.toJson<int>(durationMs),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
@@ -2986,6 +3018,7 @@ class WatchProgressData extends DataClass
     String? title,
     Value<String?> posterUrl = const Value.absent(),
     String? streamUrl,
+    Value<String?> categoryId = const Value.absent(),
     int? positionMs,
     int? durationMs,
     DateTime? updatedAt,
@@ -2995,6 +3028,7 @@ class WatchProgressData extends DataClass
     title: title ?? this.title,
     posterUrl: posterUrl.present ? posterUrl.value : this.posterUrl,
     streamUrl: streamUrl ?? this.streamUrl,
+    categoryId: categoryId.present ? categoryId.value : this.categoryId,
     positionMs: positionMs ?? this.positionMs,
     durationMs: durationMs ?? this.durationMs,
     updatedAt: updatedAt ?? this.updatedAt,
@@ -3006,6 +3040,9 @@ class WatchProgressData extends DataClass
       title: data.title.present ? data.title.value : this.title,
       posterUrl: data.posterUrl.present ? data.posterUrl.value : this.posterUrl,
       streamUrl: data.streamUrl.present ? data.streamUrl.value : this.streamUrl,
+      categoryId: data.categoryId.present
+          ? data.categoryId.value
+          : this.categoryId,
       positionMs: data.positionMs.present
           ? data.positionMs.value
           : this.positionMs,
@@ -3024,6 +3061,7 @@ class WatchProgressData extends DataClass
           ..write('title: $title, ')
           ..write('posterUrl: $posterUrl, ')
           ..write('streamUrl: $streamUrl, ')
+          ..write('categoryId: $categoryId, ')
           ..write('positionMs: $positionMs, ')
           ..write('durationMs: $durationMs, ')
           ..write('updatedAt: $updatedAt')
@@ -3038,6 +3076,7 @@ class WatchProgressData extends DataClass
     title,
     posterUrl,
     streamUrl,
+    categoryId,
     positionMs,
     durationMs,
     updatedAt,
@@ -3051,6 +3090,7 @@ class WatchProgressData extends DataClass
           other.title == this.title &&
           other.posterUrl == this.posterUrl &&
           other.streamUrl == this.streamUrl &&
+          other.categoryId == this.categoryId &&
           other.positionMs == this.positionMs &&
           other.durationMs == this.durationMs &&
           other.updatedAt == this.updatedAt);
@@ -3062,6 +3102,7 @@ class WatchProgressCompanion extends UpdateCompanion<WatchProgressData> {
   final Value<String> title;
   final Value<String?> posterUrl;
   final Value<String> streamUrl;
+  final Value<String?> categoryId;
   final Value<int> positionMs;
   final Value<int> durationMs;
   final Value<DateTime> updatedAt;
@@ -3072,6 +3113,7 @@ class WatchProgressCompanion extends UpdateCompanion<WatchProgressData> {
     this.title = const Value.absent(),
     this.posterUrl = const Value.absent(),
     this.streamUrl = const Value.absent(),
+    this.categoryId = const Value.absent(),
     this.positionMs = const Value.absent(),
     this.durationMs = const Value.absent(),
     this.updatedAt = const Value.absent(),
@@ -3083,6 +3125,7 @@ class WatchProgressCompanion extends UpdateCompanion<WatchProgressData> {
     required String title,
     this.posterUrl = const Value.absent(),
     required String streamUrl,
+    this.categoryId = const Value.absent(),
     required int positionMs,
     required int durationMs,
     required DateTime updatedAt,
@@ -3100,6 +3143,7 @@ class WatchProgressCompanion extends UpdateCompanion<WatchProgressData> {
     Expression<String>? title,
     Expression<String>? posterUrl,
     Expression<String>? streamUrl,
+    Expression<String>? categoryId,
     Expression<int>? positionMs,
     Expression<int>? durationMs,
     Expression<DateTime>? updatedAt,
@@ -3111,6 +3155,7 @@ class WatchProgressCompanion extends UpdateCompanion<WatchProgressData> {
       if (title != null) 'title': title,
       if (posterUrl != null) 'poster_url': posterUrl,
       if (streamUrl != null) 'stream_url': streamUrl,
+      if (categoryId != null) 'category_id': categoryId,
       if (positionMs != null) 'position_ms': positionMs,
       if (durationMs != null) 'duration_ms': durationMs,
       if (updatedAt != null) 'updated_at': updatedAt,
@@ -3124,6 +3169,7 @@ class WatchProgressCompanion extends UpdateCompanion<WatchProgressData> {
     Value<String>? title,
     Value<String?>? posterUrl,
     Value<String>? streamUrl,
+    Value<String?>? categoryId,
     Value<int>? positionMs,
     Value<int>? durationMs,
     Value<DateTime>? updatedAt,
@@ -3135,6 +3181,7 @@ class WatchProgressCompanion extends UpdateCompanion<WatchProgressData> {
       title: title ?? this.title,
       posterUrl: posterUrl ?? this.posterUrl,
       streamUrl: streamUrl ?? this.streamUrl,
+      categoryId: categoryId ?? this.categoryId,
       positionMs: positionMs ?? this.positionMs,
       durationMs: durationMs ?? this.durationMs,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -3160,6 +3207,9 @@ class WatchProgressCompanion extends UpdateCompanion<WatchProgressData> {
     if (streamUrl.present) {
       map['stream_url'] = Variable<String>(streamUrl.value);
     }
+    if (categoryId.present) {
+      map['category_id'] = Variable<String>(categoryId.value);
+    }
     if (positionMs.present) {
       map['position_ms'] = Variable<int>(positionMs.value);
     }
@@ -3183,6 +3233,7 @@ class WatchProgressCompanion extends UpdateCompanion<WatchProgressData> {
           ..write('title: $title, ')
           ..write('posterUrl: $posterUrl, ')
           ..write('streamUrl: $streamUrl, ')
+          ..write('categoryId: $categoryId, ')
           ..write('positionMs: $positionMs, ')
           ..write('durationMs: $durationMs, ')
           ..write('updatedAt: $updatedAt, ')
@@ -6191,6 +6242,7 @@ typedef $$WatchProgressTableCreateCompanionBuilder =
       required String title,
       Value<String?> posterUrl,
       required String streamUrl,
+      Value<String?> categoryId,
       required int positionMs,
       required int durationMs,
       required DateTime updatedAt,
@@ -6203,6 +6255,7 @@ typedef $$WatchProgressTableUpdateCompanionBuilder =
       Value<String> title,
       Value<String?> posterUrl,
       Value<String> streamUrl,
+      Value<String?> categoryId,
       Value<int> positionMs,
       Value<int> durationMs,
       Value<DateTime> updatedAt,
@@ -6240,6 +6293,11 @@ class $$WatchProgressTableFilterComposer
 
   ColumnFilters<String> get streamUrl => $composableBuilder(
     column: $table.streamUrl,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get categoryId => $composableBuilder(
+    column: $table.categoryId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -6293,6 +6351,11 @@ class $$WatchProgressTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get categoryId => $composableBuilder(
+    column: $table.categoryId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get positionMs => $composableBuilder(
     column: $table.positionMs,
     builder: (column) => ColumnOrderings(column),
@@ -6332,6 +6395,11 @@ class $$WatchProgressTableAnnotationComposer
 
   GeneratedColumn<String> get streamUrl =>
       $composableBuilder(column: $table.streamUrl, builder: (column) => column);
+
+  GeneratedColumn<String> get categoryId => $composableBuilder(
+    column: $table.categoryId,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<int> get positionMs => $composableBuilder(
     column: $table.positionMs,
@@ -6387,6 +6455,7 @@ class $$WatchProgressTableTableManager
                 Value<String> title = const Value.absent(),
                 Value<String?> posterUrl = const Value.absent(),
                 Value<String> streamUrl = const Value.absent(),
+                Value<String?> categoryId = const Value.absent(),
                 Value<int> positionMs = const Value.absent(),
                 Value<int> durationMs = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
@@ -6397,6 +6466,7 @@ class $$WatchProgressTableTableManager
                 title: title,
                 posterUrl: posterUrl,
                 streamUrl: streamUrl,
+                categoryId: categoryId,
                 positionMs: positionMs,
                 durationMs: durationMs,
                 updatedAt: updatedAt,
@@ -6409,6 +6479,7 @@ class $$WatchProgressTableTableManager
                 required String title,
                 Value<String?> posterUrl = const Value.absent(),
                 required String streamUrl,
+                Value<String?> categoryId = const Value.absent(),
                 required int positionMs,
                 required int durationMs,
                 required DateTime updatedAt,
@@ -6419,6 +6490,7 @@ class $$WatchProgressTableTableManager
                 title: title,
                 posterUrl: posterUrl,
                 streamUrl: streamUrl,
+                categoryId: categoryId,
                 positionMs: positionMs,
                 durationMs: durationMs,
                 updatedAt: updatedAt,

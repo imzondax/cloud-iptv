@@ -250,6 +250,38 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   }, timeout: const Timeout(Duration(minutes: 2)));
 
+  testWidgets('leaving while the player starts stops it for good',
+      (tester) async {
+    final db = AppDatabase(NativeDatabase.memory());
+    final container = ProviderContainer(
+        overrides: [databaseProvider.overrideWithValue(db)]);
+    addTearDown(() async {
+      container.dispose();
+      await db.close();
+    });
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: const MaterialApp(home: PlayerScreen()),
+    ));
+    final active = container.read(activeStreamProvider.notifier);
+    unawaited(active.playVod(VodItem(
+      id: '1:left',
+      sourceId: 1,
+      title: 'Left',
+      streamUrl: File(_sample).absolute.path,
+      categoryId: 'c',
+      sortOrder: 0,
+    )));
+    await tester.pump(const Duration(milliseconds: 30));
+    unawaited(active.stop());
+    await wait(tester, const Duration(seconds: 5));
+    player = await tester.runAsync(() => container.read(playerProvider.future))
+        as IptvPlayer;
+    expect(player.player.state.playing, isFalse);
+    expect(position(), Duration.zero);
+    await tester.pumpWidget(const SizedBox());
+  }, timeout: const Timeout(Duration(minutes: 1)));
+
   testWidgets('keys, picture size and rolling into the next episode',
       (tester) async {
     final db = AppDatabase(NativeDatabase.memory());

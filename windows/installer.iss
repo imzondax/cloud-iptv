@@ -35,3 +35,14 @@ Name: "{autodesktop}\Cloud IPTV"; Filename: "{app}\cloud_iptv.exe"
 
 [Run]
 Filename: "{app}\cloud_iptv.exe"; Description: "Launch Cloud IPTV"; Flags: nowait postinstall skipifsilent
+
+[Code]
+// Saved logins would otherwise outlive the app, but only the user may drop
+// them: someone reinstalling wants their sources back.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if (CurUninstallStep = usPostUninstall) and not UninstallSilent and
+     (MsgBox('Also remove your saved sources, logins and watch history?',
+             mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES) then
+    DelTree(ExpandConstant('{userappdata}\com.cloudiptv\Cloud IPTV'), True, True, True);
+end;

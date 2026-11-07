@@ -20,6 +20,9 @@ class SourcesTab extends ConsumerWidget {
     final hardware = ref.watch(hardwareAccelerationProvider).value ?? true;
     final buffer =
         ref.watch(bufferProfileProvider).value ?? BufferProfile.medium;
+    // A new or re-added source has no locks, so this needs the PIN as well.
+    final guarded = ref.watch(settingProvider(pinKey)).value != null &&
+        !(ref.watch(unlockedProvider).value ?? false);
 
     return Align(
       alignment: Alignment.topCenter,
@@ -46,14 +49,15 @@ class SourcesTab extends ConsumerWidget {
                           ? null
                           : () => ref.read(syncProvider.notifier).syncAll(),
                     ),
-                    FilledButton.icon(
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text('Add source'),
-                      onPressed: () => showDialog<void>(
-                        context: context,
-                        builder: (_) => const _SourceDialog(),
+                    if (!guarded)
+                      FilledButton.icon(
+                        icon: const Icon(Icons.add, size: 18),
+                        label: const Text('Add source'),
+                        onPressed: () => showDialog<void>(
+                          context: context,
+                          builder: (_) => const _SourceDialog(),
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ],
@@ -68,7 +72,7 @@ class SourcesTab extends ConsumerWidget {
                 ),
               ),
             for (final s in sources) ...[
-              _SourceCard(source: s),
+              _SourceCard(source: s, editable: !guarded),
               const SizedBox(height: 12),
             ],
             const SizedBox(height: 16),
@@ -553,9 +557,10 @@ class _Card extends StatelessWidget {
 }
 
 class _SourceCard extends ConsumerWidget {
-  const _SourceCard({required this.source});
+  const _SourceCard({required this.source, required this.editable});
 
   final Source source;
+  final bool editable;
 
   Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
     final confirmed = await showDialog<bool>(
@@ -624,20 +629,22 @@ class _SourceCard extends ConsumerWidget {
                   ],
                 ),
               ),
-              IconButton(
-                tooltip: 'Edit ${s.name}',
-                icon: const Icon(Icons.edit_outlined, size: 20),
-                onPressed: () => showDialog<void>(
-                  context: context,
-                  builder: (_) => _SourceDialog(source: s),
+              if (editable) ...[
+                IconButton(
+                  tooltip: 'Edit ${s.name}',
+                  icon: const Icon(Icons.edit_outlined, size: 20),
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => _SourceDialog(source: s),
+                  ),
                 ),
-              ),
-              IconButton(
-                tooltip: 'Remove ${s.name}',
-                icon: const Icon(Icons.delete_outline,
-                    size: 20, color: OnAir.muted),
-                onPressed: () => _confirmDelete(context, ref),
-              ),
+                IconButton(
+                  tooltip: 'Remove ${s.name}',
+                  icon: const Icon(Icons.delete_outline,
+                      size: 20, color: OnAir.muted),
+                  onPressed: () => _confirmDelete(context, ref),
+                ),
+              ],
             ],
           ),
           if (stats != null) ...[

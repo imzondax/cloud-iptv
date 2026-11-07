@@ -74,6 +74,7 @@ class IptvPlayer {
   List<String> _urls = const [];
   bool _live = false;
   bool _reopening = false;
+  int _request = 0;
   Timer? _watchdog;
   Duration? _healthyAt;
   Duration _lastPosition = Duration.zero;
@@ -118,7 +119,10 @@ class IptvPlayer {
   /// A movie begins at [start], if given.
   Future<void> open(List<String> urls,
       {required bool live, Duration? start}) async {
+    final request = ++_request;
     await _ready;
+    // Startup can take seconds, and the viewer may have left or moved on.
+    if (request != _request) return;
     _urls = urls;
     _policy = FailoverPolicy(urls);
     _live = live;
@@ -131,6 +135,7 @@ class IptvPlayer {
   Future<void> retry() => open(_urls, live: _live, start: _lastPosition);
 
   Future<void> stop() async {
+    _request++;
     _policy = null;
     _watchdog?.cancel();
     buffering.value = false;

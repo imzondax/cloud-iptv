@@ -113,10 +113,12 @@ Future<String?> searchTmdbPoster(Dio dio, String key,
 /// The title a search should use: the provider's, without its tags.
 String searchableTitle(String raw) {
   var t = raw.trim();
+  // Tags first and repeatedly: providers stack them, as in `4K | EN - Title`.
   while (_tagPrefix.hasMatch(t)) {
     t = t.replaceFirst(_tagPrefix, '');
   }
-  return t.replaceAll(_bracketed, ' ').replaceFirst(_qualitySuffix, '').trim();
+  t = t.replaceAll(_bracketed, ' ').replaceFirst(_qualitySuffix, '').trim();
+  return t.replaceFirst(_trailingYear, '');
 }
 
 String encodeTmdbLists(List<TmdbList> lists) => jsonEncode([
@@ -150,23 +152,17 @@ List<TmdbList> decodeTmdbLists(String json) => [
 
 final _tagPrefix = RegExp(r'^(\|[A-Z0-9+]{2,5}\|\s*|[A-Z0-9+]{2,5}\s*[-|:]\s+)');
 final _bracketed = RegExp(r'[\[(][^\])]*[\])]');
-final _qualitySuffix =
-    RegExp(r'\s+(4k|uhd|fhd|hd|sd|hevc|multi[- ]?(sub|audio))\s*$');
+final _qualitySuffix = RegExp(r'\s+(4k|uhd|fhd|hd|sd|hevc|multi[- ]?(sub|audio))\s*$',
+    caseSensitive: false);
+final _trailingYear = RegExp(r'\s+(19|20)\d\d$');
 final _punctuation = RegExp(r'[^\p{L}\p{N}]+', unicode: true);
 final _yearInTitle = RegExp(r'[\[(]((?:19|20)\d\d)[\])]|\s((?:19|20)\d\d)\s*$');
 
 /// Reduces provider and TMDB spellings to one comparable form, so that
 /// `EN - The Matrix (1999) [4K]` and `The Matrix` meet.
 String normalizeTitle(String raw) {
-  var t = raw.trim();
-  // Tags first and repeatedly: providers stack them, as in `4K | EN - Title`.
-  while (_tagPrefix.hasMatch(t)) {
-    t = t.replaceFirst(_tagPrefix, '');
-  }
-  t = t.replaceAll(_bracketed, ' ').toLowerCase();
-  t = t.replaceFirst(_qualitySuffix, '').replaceAll('&', ' and ');
-  t = t.replaceAll(_punctuation, ' ').trim();
-  t = t.replaceFirst(RegExp(r'\s+(19|20)\d\d$'), '');
+  var t = searchableTitle(raw).toLowerCase().replaceAll('&', ' and ');
+  t = t.replaceAll(_punctuation, ' ').trim().replaceFirst(_trailingYear, '');
   return t.startsWith('the ') ? t.substring(4) : t;
 }
 

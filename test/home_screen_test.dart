@@ -98,6 +98,10 @@ class FakeActiveStream extends ActiveStream {
       played.add(item.title);
 
   @override
+  Future<void> playCatchUp(PlaylistChannel channel, EpgProgram program) async =>
+      played.add(program.title);
+
+  @override
   Future<void> stop() async {}
 }
 
@@ -141,6 +145,7 @@ Future<void> seed(AppDatabase db) async {
             tvgId: i == 5 ? null : 'tvg$i',
             backendType: BackendType.xtream,
             sortOrder: i,
+            archiveDays: i == 0 ? 2 : 0,
           ),
       ],
       vod: [
@@ -349,7 +354,8 @@ void main() {
     await tester.runAsync(db.close);
   }, timeout: const Timeout(Duration(minutes: 1)));
 
-  Future<AppDatabase> pumpApp(WidgetTester tester, Widget home) async {
+  Future<AppDatabase> pumpApp(WidgetTester tester, Widget home,
+      {Stream<int>? minutes}) async {
     await binding.setSurfaceSize(const Size(1440, 1000));
     addTearDown(() => binding.setSurfaceSize(null));
     final db = AppDatabase(NativeDatabase.memory());
@@ -361,6 +367,7 @@ void main() {
             .overrideWithValue(Dio()..httpClientAdapter = EpisodesAdapter()),
         activeStreamProvider.overrideWith(FakeActiveStream.new),
         playerProvider.overrideWith((ref) => Completer<IptvPlayer>().future),
+        if (minutes != null) minuteProvider.overrideWith((ref) => minutes),
       ],
       child: MaterialApp(theme: onAirTheme(), home: home),
     ));
@@ -421,6 +428,64 @@ void main() {
     await finish(tester, db);
   });
 
+  testWidgets('the catch-up list replays a past programme', (tester) async {
+    FakeActiveStream.played.clear();
+    final db = await pumpApp(tester, const Scaffold(body: GuideTab()));
+    final now = DateTime.now();
+    await tester.runAsync(() => db.saveEpg([
+          EpgProgram(
+            channelId: 'tvg0',
+            title: 'Old show',
+            startTime: now.subtract(const Duration(hours: 5)),
+            stopTime: now.subtract(const Duration(hours: 4)),
+          ),
+        ]));
+    await tester.tap(find.byTooltip('Catch up on Nordlys News'));
+    await settle(tester);
+    await tester.tap(find.text('Old show'));
+    await settle(tester);
+    expect(find.byType(PlayerScreen), findsOneWidget);
+    expect(FakeActiveStream.played, ['Old show']);
+    await finish(tester, db);
+  });
+
+  testWidgets('a due reminder appears, one long past does not', (tester) async {
+    final minutes = StreamController<int>();
+    addTearDown(minutes.close);
+    final db =
+        await pumpApp(tester, const HomeScreen(), minutes: minutes.stream);
+    final now = DateTime.now();
+    EpgProgram show(String title, Duration from) => EpgProgram(
+          channelId: 'tvg0',
+          title: title,
+          startTime: now.add(from),
+          stopTime: now.add(from + const Duration(hours: 1)),
+        );
+    await tester.runAsync(() async {
+      await db.addReminder('1:0', show('Soon', const Duration(minutes: 1)));
+      await db.addReminder('1:0', show('Gone', const Duration(hours: -2)));
+    });
+    minutes.add(1);
+    await settle(tester);
+    expect(find.textContaining('Soon starts at'), findsOneWidget);
+    expect(find.textContaining('Gone starts at'), findsNothing);
+    expect(await tester.runAsync(() => db.watchReminders().first), isEmpty);
+    await finish(tester, db);
+  });
+
+  testWidgets('locking a category closes its open series', (tester) async {
+    final db = await pumpApp(
+        tester, const Scaffold(body: LibraryTab(kind: CategoryKind.series)));
+    await tester.tap(find.byType(PosterCard).at(1));
+    await settle(tester);
+    expect(find.text('Episode title number 1'), findsOneWidget);
+    await tester.runAsync(
+        () => db.setCategoryRule('1:series:Crime', hidden: false, locked: true));
+    await settle(tester);
+    expect(find.text('Episode title number 1'), findsNothing);
+    await finish(tester, db);
+  });
+
   testWidgets('a future programme takes a reminder', (tester) async {
     final db = await pumpApp(tester, const Scaffold(body: GuideTab()));
     await tester.tap(find.text('News').first);
@@ -469,6 +534,9 @@ void main() {
     await press('Done');
     await press('Lock now');
     expect(find.text('Manage categories'), findsNothing);
+    expect(find.text('Add source'), findsNothing);
+    expect(find.byTooltip('Edit Home provider'), findsNothing);
+    expect(find.byTooltip('Remove Home provider'), findsNothing);
     expect(
         await tester
             .runAsync(() => db.watchCategories(CategoryKind.series).first),

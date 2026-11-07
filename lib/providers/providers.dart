@@ -227,7 +227,6 @@ typedef CuratedShelf = ({String name, List<Object> items});
 final curatedShelvesProvider = FutureProvider<List<CuratedShelf>>((ref) async {
   ref.watch(sourcesProvider);
   ref.watch(categoryRulesProvider);
-  ref.watch(unlockedProvider);
   final key = await ref.watch(tmdbKeyProvider.future);
   if (key == null || key.isEmpty) return const [];
   final db = ref.read(databaseProvider);
@@ -255,7 +254,6 @@ final recommendedChannelsProvider = FutureProvider((ref) {
   ref.watch(sourcesProvider);
   ref.watch(favoriteIdsProvider);
   ref.watch(categoryRulesProvider);
-  ref.watch(unlockedProvider);
   return ref
       .watch(databaseProvider)
       .recommendedChannels(DateTime.now(), _shelfSize);
@@ -417,6 +415,9 @@ class ActiveStream extends Notifier<NowPlaying?> {
   VodItem? _vod;
   PlaylistChannel? _lastChannel;
 
+  /// Raised by every play and stop, so a slower earlier call can tell it lost.
+  int _session = 0;
+
   @override
   NowPlaying? build() {
     ref.onDispose(_stopTracking);
@@ -454,6 +455,7 @@ class ActiveStream extends Notifier<NowPlaying?> {
 
   Future<void> playChannel(PlaylistChannel channel,
       {List<PlaylistChannel>? playlist}) async {
+    final session = ++_session;
     final current = state?.channel;
     if (current != null && current.id != channel.id) _lastChannel = current;
     state = NowPlaying(channel.name,
@@ -465,6 +467,7 @@ class ActiveStream extends Notifier<NowPlaying?> {
     final fallbacks = await db.fallbackUrls(channel.id);
     final player = await ref.read(playerProvider.future);
     await _applyLanguages(player);
+    if (session != _session) return;
     await player.open([channel.streamUrl, ...fallbacks], live: true);
   }
 
@@ -478,10 +481,12 @@ class ActiveStream extends Notifier<NowPlaying?> {
   Future<void> playCatchUp(PlaylistChannel channel, EpgProgram program) async {
     final url = catchUpUrl(channel, program);
     if (url == null) return;
+    final session = ++_session;
     state = NowPlaying(program.title);
     _stopTracking();
     final player = await ref.read(playerProvider.future);
     await _applyLanguages(player);
+    if (session != _session) return;
     await player.open([url], live: false);
   }
 
@@ -494,14 +499,18 @@ class ActiveStream extends Notifier<NowPlaying?> {
 
   Future<void> playVod(VodItem item,
       {List<VodItem> upNext = const []}) async {
+    final session = ++_session;
     state = NowPlaying(item.title, upNext: upNext);
     final player = await ref.read(playerProvider.future);
     // The episode ending here may not have hit a save tick since it finished.
     await _saveProgress(player);
+    if (session != _session) return;
     _stopTracking();
     final start = await ref.read(databaseProvider).progress(item.id);
     await _applyLanguages(player);
+    if (session != _session) return;
     await player.open([item.streamUrl], live: false, start: start);
+    if (session != _session) return;
     _vod = item;
     _saver = Timer.periodic(_saveEvery, (_) => _saveProgress(player));
   }
@@ -512,6 +521,7 @@ class ActiveStream extends Notifier<NowPlaying?> {
   }
 
   Future<void> stop() async {
+    _session++;
     state = null;
     final player = await ref.read(playerProvider.future);
     await _saveProgress(player);

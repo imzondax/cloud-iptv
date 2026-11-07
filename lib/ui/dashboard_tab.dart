@@ -150,7 +150,7 @@ class _DashboardTabState extends ConsumerState<DashboardTab> {
                         title: p.title,
                         posterUrl: p.posterUrl,
                         streamUrl: p.streamUrl,
-                        categoryId: '',
+                        categoryId: p.categoryId ?? '',
                         sortOrder: 0,
                       ),
                     ),

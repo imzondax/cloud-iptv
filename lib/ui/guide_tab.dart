@@ -299,10 +299,12 @@ class _CatchUpSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final now = DateTime.now();
+    // Whole minutes, or every rebuild would ask for a new row and never get it.
+    final to = DateTime(now.year, now.month, now.day, now.hour, now.minute);
     final past = ref.watch(epgRowProvider((
       key: channel.epgKey,
-      from: now.subtract(Duration(days: channel.archiveDays)),
-      to: DateTime(now.year, now.month, now.day, now.hour, now.minute),
+      from: to.subtract(Duration(days: channel.archiveDays)),
+      to: to,
     )));
     final programs = (past.value ?? const <EpgProgram>[])
         .where((p) => canCatchUp(channel, p, now))

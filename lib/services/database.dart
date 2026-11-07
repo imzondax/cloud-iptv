@@ -15,6 +15,9 @@ class Sources extends Table {
   TextColumn get name => text()();
   TextColumn get url => text()();
   TextColumn get username => text().nullable()();
+  // shortcut: plain text here and inside stored stream URLs, protected only by
+  // the user's account. Use the system keychain if the app holds other people's
+  // logins; URLs would then have to be built at play time.
   TextColumn get password => text().nullable()();
   TextColumn get epgUrl => text().nullable()();
   TextColumn get etag => text().nullable()();
@@ -131,6 +134,7 @@ class WatchProgress extends Table {
   TextColumn get title => text()();
   TextColumn get posterUrl => text().nullable()();
   TextColumn get streamUrl => text()();
+  TextColumn get categoryId => text().nullable()();
   IntColumn get positionMs => integer()();
   IntColumn get durationMs => integer()();
   DateTimeColumn get updatedAt => dateTime()();
@@ -185,7 +189,7 @@ class Settings extends Table {
 }
 
 const favoritesCategoryId = '__favorites__';
-const _unlockedKey = 'parental_unlocked';
+const _unlockedRule = '__unlocked__';
 
 /// Unique items per source. `guide` counts channels that have programmes.
 typedef SourceStats = ({int live, int movies, int series, int guide});
@@ -215,7 +219,7 @@ class AppDatabase extends _$AppDatabase {
             ));
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -249,21 +253,36 @@ class AppDatabase extends _$AppDatabase {
               lastSyncedAt: Value(null),
             ));
           }
+          if (from < 5) {
+            // Older versions create this table above, with the column.
+            if (from >= 3) {
+              await m.addColumn(watchProgress, watchProgress.categoryId);
+              await customStatement('''
+                UPDATE watch_progress SET category_id = (
+                  SELECT category_id FROM vod_items
+                  WHERE vod_items.id = watch_progress.item_id LIMIT 1)
+              ''');
+            }
+            // Searches that failed on tags like HD were saved as "no poster".
+            await (delete(settings)..where((s) => s.key.like('art:%'))).go();
+            await (delete(settings)
+                  ..where((s) => s.key.equals('parental_unlocked')))
+                .go();
+          }
         },
         // A PIN unlock lasts until the app closes.
         beforeOpen: (details) async {
-          if (details.versionBefore != null) {
-            await (delete(settings)..where((s) => s.key.equals(_unlockedKey)))
-                .go();
-          }
+          if (details.versionBefore != null) await setUnlocked(false);
         },
       );
 
   /// Leaves out what sits in hidden categories, and in locked ones until the
-  /// PIN has been entered. The session flag lives in [settings], so that
-  /// running queries update by themselves when it changes.
+  /// PIN has been entered. The session flag is a reserved row in
+  /// [categoryRules], so these queries depend on that table alone: in settings,
+  /// every saved poster or volume would rerun them all.
   Expression<bool> _shown(GeneratedColumn<String> categoryId) {
-    final unlocked = select(settings)..where((s) => s.key.equals(_unlockedKey));
+    final unlocked = select(categoryRules)
+      ..where((r) => r.categoryId.equals(_unlockedRule));
     final blocked = selectOnly(categoryRules)
       ..addColumns([categoryRules.categoryId])
       ..where(categoryRules.hidden |
@@ -312,6 +331,11 @@ class AppDatabase extends _$AppDatabase {
   /// Atomic, so a failure part-way keeps the previous catalog.
   Future<void> replaceCatalog(Source source, PlaylistData data) =>
       transaction(() async {
+        // Removed while this sync ran: rows without a source can never go.
+        final current = await (select(sources)
+              ..where((s) => s.id.equals(source.id)))
+            .getSingleOrNull();
+        if (current == null) return;
         await _deleteCatalog(source.id);
         await batch((b) {
           const mode = InsertMode.insertOrReplace;
@@ -495,10 +519,15 @@ class AppDatabase extends _$AppDatabase {
       .write(const CategoryRulesCompanion(locked: Value(false)));
 
   Future<void> setUnlocked(bool unlocked) => unlocked
-      ? saveSetting(_unlockedKey, '1')
-      : (delete(settings)..where((s) => s.key.equals(_unlockedKey))).go();
+      ? setCategoryRule(_unlockedRule, hidden: false, locked: false)
+      : (delete(categoryRules)
+              ..where((r) => r.categoryId.equals(_unlockedRule)))
+          .go();
 
-  Stream<bool> watchUnlocked() => watchSetting(_unlockedKey).map((v) => v != null);
+  Stream<bool> watchUnlocked() => (select(categoryRules)
+        ..where((r) => r.categoryId.equals(_unlockedRule)))
+      .watch()
+      .map((rows) => rows.isNotEmpty);
 
   // Favourite movies and series
 
@@ -563,6 +592,7 @@ class AppDatabase extends _$AppDatabase {
         title: item.title,
         posterUrl: Value(item.posterUrl),
         streamUrl: item.streamUrl,
+        categoryId: Value(item.categoryId),
         positionMs: position.inMilliseconds,
         durationMs: duration.inMilliseconds,
         updatedAt: DateTime.now(),
@@ -578,16 +608,13 @@ class AppDatabase extends _$AppDatabase {
     return row == null ? null : Duration(milliseconds: row.positionMs);
   }
 
-  Stream<List<WatchProgressData>> watchKeepWatching(int limit) {
-    final blocked = selectOnly(vodItems)
-      ..addColumns([vodItems.id])
-      ..where(_shown(vodItems.categoryId).not());
-    return (select(watchProgress)
-          ..where((w) => w.itemId.isNotInQuery(blocked))
-          ..orderBy([(w) => OrderingTerm.desc(w.updatedAt)])
-          ..limit(limit))
-        .watch();
-  }
+  // Episodes saved before version 5 have no category until watched again.
+  Stream<List<WatchProgressData>> watchKeepWatching(int limit) =>
+      (select(watchProgress)
+            ..where((w) => w.categoryId.isNull() | _shown(w.categoryId))
+            ..orderBy([(w) => OrderingTerm.desc(w.updatedAt)])
+            ..limit(limit))
+          .watch();
 
   Future<void> markChannelWatched(String channelId) =>
       into(recentChannels).insertOnConflictUpdate(
@@ -741,9 +768,26 @@ class AppDatabase extends _$AppDatabase {
     };
   }
 
-  Future<void> saveEpg(List<EpgProgram> programs) => batch((b) => b.insertAll(
-      epgPrograms, programs.map((e) => e.toInsertable()),
-      mode: InsertMode.insertOrReplace));
+  /// Replaces what each channel had over the span [programs] covers, or a
+  /// programme moved to a new time would also stay at its old one.
+  Future<void> saveEpg(List<EpgProgram> programs) => batch((b) {
+        final spans = <String, (DateTime, DateTime)>{};
+        for (final p in programs) {
+          final (first, last) =
+              spans[p.channelId] ?? (p.startTime, p.startTime);
+          spans[p.channelId] = (
+            p.startTime.isBefore(first) ? p.startTime : first,
+            p.startTime.isAfter(last) ? p.startTime : last,
+          );
+        }
+        spans.forEach((channel, span) => b.deleteWhere(
+            epgPrograms,
+            (e) =>
+                e.channelId.equals(channel) &
+                e.startTime.isBetweenValues(span.$1, span.$2)));
+        b.insertAll(epgPrograms, programs.map((e) => e.toInsertable()),
+            mode: InsertMode.insertOrReplace);
+      });
 
   Future<void> pruneEpg(DateTime before) =>
       (delete(epgPrograms)..where((e) => e.stopTime.isSmallerThanValue(before)))

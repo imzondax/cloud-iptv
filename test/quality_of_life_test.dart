@@ -122,6 +122,10 @@ void main() {
   test('artwork searches drop provider tags', () {
     expect(searchableTitle('EN - The Matrix (1999) [4K]'), 'The Matrix');
     expect(searchableTitle('|NO| Kon-Tiki'), 'Kon-Tiki');
+    expect(searchableTitle('The Matrix HD'), 'The Matrix');
+    expect(searchableTitle('The Matrix 1999'), 'The Matrix');
+    expect(searchableTitle('Dune (2021) FHD'), 'Dune');
+    expect(searchableTitle('1917'), '1917');
   });
 
   group('database', () {
@@ -168,6 +172,60 @@ void main() {
       await db.setCategoryRule('b', hidden: true, locked: false);
       await db.setUnlocked(true);
       expect(await shownTop(), ['$id:1']);
+    });
+
+    test('saved settings do not rerun the catalog lists', () async {
+      var emits = 0;
+      final sub = db.watchTopVod(5).listen((_) => emits++);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final before = emits;
+      await db.saveSetting('art:x', 'y');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(emits, before);
+      await db.setUnlocked(true);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(emits, before + 1);
+      await sub.cancel();
+    });
+
+    test('a sync finishing after its source was removed leaves nothing',
+        () async {
+      final source = await db.source(id);
+      await db.deleteSource(id);
+      await db.replaceCatalog(
+          source, PlaylistData(vod: [_vod('$id:1', 'a')]));
+      expect(await db.watchTopVod(5).first, isEmpty);
+    });
+
+    test('a locked series leaves Keep watching, episodes included', () async {
+      await db.saveProgress(_vod('$id:ep:9', 'crime'),
+          const Duration(minutes: 5), const Duration(minutes: 40));
+      expect(await db.watchKeepWatching(5).first, hasLength(1));
+      await db.setCategoryRule('crime', hidden: false, locked: true);
+      expect(await db.watchKeepWatching(5).first, isEmpty);
+      await db.setUnlocked(true);
+      expect(await db.watchKeepWatching(5).first, hasLength(1));
+    });
+
+    test('a moved programme does not stay at its old time', () async {
+      final at = DateTime(2026, 11, 7, 20);
+      EpgProgram show(String title, int minutes) => EpgProgram(
+            channelId: 'news',
+            title: title,
+            startTime: at.add(Duration(minutes: minutes)),
+            stopTime: at.add(Duration(minutes: minutes + 30)),
+          );
+      await db.saveEpg([
+        show('History', -120),
+        show('Before', -60),
+        show('Old time', 0),
+        show('Next', 60),
+      ]);
+      // A later feed no longer reaches back to History, which catch-up needs.
+      await db.saveEpg([show('Before', -60), show('New time', 15), show('Next', 60)]);
+      final rows = await db.programs('news', at.subtract(const Duration(hours: 3)),
+          at.add(const Duration(hours: 2)));
+      expect(rows.map((p) => p.title), ['History', 'Before', 'New time', 'Next']);
     });
 
     test('removing the PIN cannot strand a lock', () async {
@@ -233,6 +291,8 @@ void main() {
         backend_type, sort_order) VALUES ('$id:1', $id, 'n', 'u', 'c', 'xtream', 0)
     ''');
     await db.customStatement('ALTER TABLE channels DROP COLUMN archive_days');
+    await db.customStatement(
+        'ALTER TABLE watch_progress DROP COLUMN category_id');
     for (final t in ['favorite_titles', 'category_rules', 'reminders']) {
       await db.customStatement('DROP TABLE $t');
     }
@@ -247,6 +307,32 @@ void main() {
     final source = await db.source(id);
     expect(source.etag, isNull);
     expect(source.lastSyncedAt, isNull);
+  });
+
+  test('a version 4 database keeps Keep watching filtered', () async {
+    final dir = Directory.systemTemp.createTempSync('cloud_iptv_v4');
+    final file = File('${dir.path}/app.sqlite');
+    addTearDown(() => dir.deleteSync(recursive: true));
+
+    var db = AppDatabase(NativeDatabase(file));
+    final id = await _source(db);
+    await _catalog(db, id);
+    await db.saveProgress(_vod('$id:2', 'b'), const Duration(minutes: 5),
+        const Duration(minutes: 90));
+    await db.saveSetting('art:false:matrix hd:null', '');
+    await db.saveSetting('volume', '40');
+    await db.customStatement(
+        'ALTER TABLE watch_progress DROP COLUMN category_id');
+    await db.customStatement('PRAGMA user_version = 4');
+    await db.close();
+
+    db = AppDatabase(NativeDatabase(file));
+    addTearDown(db.close);
+    expect(await db.watchKeepWatching(5).first, hasLength(1));
+    await db.setCategoryRule('b', hidden: true, locked: false);
+    expect(await db.watchKeepWatching(5).first, isEmpty);
+    expect(await db.setting('art:false:matrix hd:null'), isNull);
+    expect(await db.setting('volume'), '40');
   });
 
   test('a locked session does not survive a restart', () async {

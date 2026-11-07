@@ -60,7 +60,11 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
 
     return LayoutBuilder(builder: (context, constraints) {
       final panel = _isSeries && constraints.maxWidth >= 1100;
-      final series = _series ??
+      // Locking a category must also close the series open from it.
+      final picked = categories.any((c) => c.id == _series?.categoryId)
+          ? _series
+          : null;
+      final series = picked ??
           (panel
               ? (rows.value ?? const []).whereType<SeriesItem>().firstOrNull
               : null);
