@@ -42,6 +42,12 @@ retry, failover, stalls and dropped connections. It takes about 2 minutes.
     lib/player     libmpv tuning, retry and failover, video widget
     lib/ui         screens
 
+## Builds
+
+Before each build, run `python scripts/new_build.py "What changed"`. It raises
+the build number and adds the note to [CHANGELOG.md](CHANGELOG.md). Commit and
+push both.
+
 ## Website
 
 The site at https://imzondax.github.io/cloud-iptv/ is served from `docs/`.
