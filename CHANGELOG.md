@@ -1,6 +1,6 @@
 # Changelog
 
-## Build 3 (1.0.1) - 2026-11-08
+## Build 3 (1.0.2) - 2026-11-08
 
 - More filters in Movies and Series: language, release year, minimum rating, and genre and director for series.
 
