@@ -1540,6 +1540,26 @@ class $SeriesItemsTable extends SeriesItems
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _directorMeta = const VerificationMeta(
+    'director',
+  );
+  @override
+  late final GeneratedColumn<String> director = GeneratedColumn<String>(
+    'director',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _genreMeta = const VerificationMeta('genre');
+  @override
+  late final GeneratedColumn<String> genre = GeneratedColumn<String>(
+    'genre',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1550,6 +1570,8 @@ class $SeriesItemsTable extends SeriesItems
     year,
     rating,
     sortOrder,
+    director,
+    genre,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1618,6 +1640,18 @@ class $SeriesItemsTable extends SeriesItems
     } else if (isInserting) {
       context.missing(_sortOrderMeta);
     }
+    if (data.containsKey('director')) {
+      context.handle(
+        _directorMeta,
+        director.isAcceptableOrUnknown(data['director']!, _directorMeta),
+      );
+    }
+    if (data.containsKey('genre')) {
+      context.handle(
+        _genreMeta,
+        genre.isAcceptableOrUnknown(data['genre']!, _genreMeta),
+      );
+    }
     return context;
   }
 
@@ -1659,6 +1693,14 @@ class $SeriesItemsTable extends SeriesItems
         DriftSqlType.int,
         data['${effectivePrefix}sort_order'],
       )!,
+      director: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}director'],
+      ),
+      genre: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}genre'],
+      ),
     );
   }
 
@@ -1677,6 +1719,8 @@ class SeriesItemsCompanion extends UpdateCompanion<SeriesItem> {
   final Value<int?> year;
   final Value<double?> rating;
   final Value<int> sortOrder;
+  final Value<String?> director;
+  final Value<String?> genre;
   final Value<int> rowid;
   const SeriesItemsCompanion({
     this.id = const Value.absent(),
@@ -1687,6 +1731,8 @@ class SeriesItemsCompanion extends UpdateCompanion<SeriesItem> {
     this.year = const Value.absent(),
     this.rating = const Value.absent(),
     this.sortOrder = const Value.absent(),
+    this.director = const Value.absent(),
+    this.genre = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   SeriesItemsCompanion.insert({
@@ -1698,6 +1744,8 @@ class SeriesItemsCompanion extends UpdateCompanion<SeriesItem> {
     this.year = const Value.absent(),
     this.rating = const Value.absent(),
     required int sortOrder,
+    this.director = const Value.absent(),
+    this.genre = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        sourceId = Value(sourceId),
@@ -1713,6 +1761,8 @@ class SeriesItemsCompanion extends UpdateCompanion<SeriesItem> {
     Expression<int>? year,
     Expression<double>? rating,
     Expression<int>? sortOrder,
+    Expression<String>? director,
+    Expression<String>? genre,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1724,6 +1774,8 @@ class SeriesItemsCompanion extends UpdateCompanion<SeriesItem> {
       if (year != null) 'year': year,
       if (rating != null) 'rating': rating,
       if (sortOrder != null) 'sort_order': sortOrder,
+      if (director != null) 'director': director,
+      if (genre != null) 'genre': genre,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1737,6 +1789,8 @@ class SeriesItemsCompanion extends UpdateCompanion<SeriesItem> {
     Value<int?>? year,
     Value<double?>? rating,
     Value<int>? sortOrder,
+    Value<String?>? director,
+    Value<String?>? genre,
     Value<int>? rowid,
   }) {
     return SeriesItemsCompanion(
@@ -1748,6 +1802,8 @@ class SeriesItemsCompanion extends UpdateCompanion<SeriesItem> {
       year: year ?? this.year,
       rating: rating ?? this.rating,
       sortOrder: sortOrder ?? this.sortOrder,
+      director: director ?? this.director,
+      genre: genre ?? this.genre,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1779,6 +1835,12 @@ class SeriesItemsCompanion extends UpdateCompanion<SeriesItem> {
     if (sortOrder.present) {
       map['sort_order'] = Variable<int>(sortOrder.value);
     }
+    if (director.present) {
+      map['director'] = Variable<String>(director.value);
+    }
+    if (genre.present) {
+      map['genre'] = Variable<String>(genre.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1796,6 +1858,8 @@ class SeriesItemsCompanion extends UpdateCompanion<SeriesItem> {
           ..write('year: $year, ')
           ..write('rating: $rating, ')
           ..write('sortOrder: $sortOrder, ')
+          ..write('director: $director, ')
+          ..write('genre: $genre, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1816,6 +1880,8 @@ class _$SeriesItemInsertable implements Insertable<SeriesItem> {
       year: Value(_object.year),
       rating: Value(_object.rating),
       sortOrder: Value(_object.sortOrder),
+      director: Value(_object.director),
+      genre: Value(_object.genre),
     ).toColumns(false);
   }
 }
@@ -5338,6 +5404,8 @@ typedef $$SeriesItemsTableCreateCompanionBuilder =
       Value<int?> year,
       Value<double?> rating,
       required int sortOrder,
+      Value<String?> director,
+      Value<String?> genre,
       Value<int> rowid,
     });
 typedef $$SeriesItemsTableUpdateCompanionBuilder =
@@ -5350,6 +5418,8 @@ typedef $$SeriesItemsTableUpdateCompanionBuilder =
       Value<int?> year,
       Value<double?> rating,
       Value<int> sortOrder,
+      Value<String?> director,
+      Value<String?> genre,
       Value<int> rowid,
     });
 
@@ -5399,6 +5469,16 @@ class $$SeriesItemsTableFilterComposer
 
   ColumnFilters<int> get sortOrder => $composableBuilder(
     column: $table.sortOrder,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get director => $composableBuilder(
+    column: $table.director,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get genre => $composableBuilder(
+    column: $table.genre,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -5451,6 +5531,16 @@ class $$SeriesItemsTableOrderingComposer
     column: $table.sortOrder,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get director => $composableBuilder(
+    column: $table.director,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get genre => $composableBuilder(
+    column: $table.genre,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$SeriesItemsTableAnnotationComposer
@@ -5487,6 +5577,12 @@ class $$SeriesItemsTableAnnotationComposer
 
   GeneratedColumn<int> get sortOrder =>
       $composableBuilder(column: $table.sortOrder, builder: (column) => column);
+
+  GeneratedColumn<String> get director =>
+      $composableBuilder(column: $table.director, builder: (column) => column);
+
+  GeneratedColumn<String> get genre =>
+      $composableBuilder(column: $table.genre, builder: (column) => column);
 }
 
 class $$SeriesItemsTableTableManager
@@ -5528,6 +5624,8 @@ class $$SeriesItemsTableTableManager
                 Value<int?> year = const Value.absent(),
                 Value<double?> rating = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
+                Value<String?> director = const Value.absent(),
+                Value<String?> genre = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => SeriesItemsCompanion(
                 id: id,
@@ -5538,6 +5636,8 @@ class $$SeriesItemsTableTableManager
                 year: year,
                 rating: rating,
                 sortOrder: sortOrder,
+                director: director,
+                genre: genre,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -5550,6 +5650,8 @@ class $$SeriesItemsTableTableManager
                 Value<int?> year = const Value.absent(),
                 Value<double?> rating = const Value.absent(),
                 required int sortOrder,
+                Value<String?> director = const Value.absent(),
+                Value<String?> genre = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => SeriesItemsCompanion.insert(
                 id: id,
@@ -5560,6 +5662,8 @@ class $$SeriesItemsTableTableManager
                 year: year,
                 rating: rating,
                 sortOrder: sortOrder,
+                director: director,
+                genre: genre,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

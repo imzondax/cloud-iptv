@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -33,6 +35,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
   String? _picked;
   String _search = '';
   SeriesItem? _series;
+  LibraryFilters _filters = noFilters;
 
   bool get _isSeries => widget.kind == CategoryKind.series;
   String get _savedCategory => 'category_${widget.kind.name}';
@@ -54,6 +57,11 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
     final rows = ref.watch(browseProvider(
         (kind: kind, categoryId: categoryId, search: _search)));
     final favorites = ref.watch(favoriteTitlesProvider(kind)).value ?? const {};
+    final categoryNames = {for (final c in categories) c.id: c.name};
+    final all = rows.value ?? const [];
+    final shown = _filters == noFilters
+        ? all
+        : all.where((r) => _matches(r, _filters, categoryNames)).toList();
     void toggle(String id) => ref
         .read(databaseProvider)
         .setFavoriteTitle(id, kind, !favorites.contains(id));
@@ -66,7 +74,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
           : null;
       final series = picked ??
           (panel
-              ? (rows.value ?? const []).whereType<SeriesItem>().firstOrNull
+              ? shown.whereType<SeriesItem>().firstOrNull
               : null);
 
       void openSeries(SeriesItem s) {
@@ -95,6 +103,20 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
                     ),
                   ),
                 ),
+                const SizedBox(width: 12),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final picked = await showDialog<LibraryFilters>(
+                      context: context,
+                      builder: (_) => _FiltersDialog(
+                          rows: all, names: categoryNames, current: _filters),
+                    );
+                    if (picked != null) setState(() => _filters = picked);
+                  },
+                  icon: const Icon(Icons.tune, size: 18),
+                  label: Text(
+                      _filters == noFilters ? 'More filters' : 'Filters on'),
+                ),
               ],
             ),
             const SizedBox(height: 20),
@@ -110,11 +132,13 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
             const SizedBox(height: 20),
             Expanded(
               child: switch (rows) {
+                AsyncData(:final value) when value.isNotEmpty && shown.isEmpty =>
+                  const EmptyMessage('No titles match these filters.'),
                 AsyncData(:final value) when value.isEmpty => EmptyMessage(
                     categoryId == favoritesCategoryId
                         ? 'No favorites yet. Use the star on a poster.'
                         : 'Nothing here yet. Add a source in Sources.'),
-                AsyncData(:final value) => GridView.builder(
+                AsyncData() => GridView.builder(
                     gridDelegate:
                         const SliverGridDelegateWithMaxCrossAxisExtent(
                       maxCrossAxisExtent: 200,
@@ -122,8 +146,8 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
                       crossAxisSpacing: 20,
                       childAspectRatio: 0.58,
                     ),
-                    itemCount: value.length,
-                    itemBuilder: (context, i) => switch (value[i]) {
+                    itemCount: shown.length,
+                    itemBuilder: (context, i) => switch (shown[i]) {
                       VodItem v => PosterCard(
                           title: v.title,
                           url: v.posterUrl,
@@ -171,6 +195,204 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
         ],
       );
     });
+  }
+}
+
+/// A two or three letter tag leading a title or category name, such as
+/// `EN - Heat`, `[DE] Krimi` or `|FR| Action`. No colon: `CSI: Miami`.
+final _languageTag = RegExp(r'^\s*[\[(|]?\s*([A-Z]{2,3})\s*[\])|-]');
+const _notLanguages = {
+  'HD', 'SD', 'FHD', 'UHD', 'HDR', 'VIP', 'NEW', 'TOP', 'ALL', 'VOD', 'TV',
+};
+
+/// shortcut: guesses from tags only, so untagged libraries get no language
+/// filter and `IT - Chapter Two` reads as Italian. Upgrade to TMDB's
+/// original_language if that matters.
+String? languageOf(String title, String? category) {
+  for (final text in [title, category ?? '']) {
+    final code = _languageTag.firstMatch(text)?[1];
+    if (code != null && !_notLanguages.contains(code)) return code;
+  }
+  return null;
+}
+
+/// The names in a panel list such as `Drama, Crime` or `Action / Comedy`.
+Iterable<String> namesIn(String? list) => (list ?? '')
+    .split(RegExp(r'[,/|]'))
+    .map((n) => n.trim())
+    .where((n) => n.isNotEmpty);
+
+typedef LibraryFilters = ({
+  String? language,
+  RangeValues? years,
+  double minRating,
+  String? director,
+  String? genre,
+});
+
+const LibraryFilters noFilters = (
+  language: null,
+  years: null,
+  minRating: 0,
+  director: null,
+  genre: null,
+);
+
+bool _matches(Object row, LibraryFilters f, Map<String, String> names) {
+  final (title, categoryId, year, rating) = switch (row) {
+    VodItem v => (v.title, v.categoryId, v.year, v.rating),
+    SeriesItem s => (s.title, s.categoryId, s.year, s.rating),
+    _ => ('', '', null, null),
+  };
+  final series = row is SeriesItem ? row : null;
+  final years = f.years;
+  return (f.language == null ||
+          languageOf(title, names[categoryId]) == f.language) &&
+      (years == null ||
+          (year != null && year >= years.start && year <= years.end)) &&
+      (rating ?? 0) >= f.minRating &&
+      (f.director == null || namesIn(series?.director).contains(f.director)) &&
+      (f.genre == null || namesIn(series?.genre).contains(f.genre));
+}
+
+/// Offers only the languages, years, directors and genres the rows contain.
+class _FiltersDialog extends StatefulWidget {
+  const _FiltersDialog({
+    required this.rows,
+    required this.names,
+    required this.current,
+  });
+
+  final List<Object> rows;
+  final Map<String, String> names;
+  final LibraryFilters current;
+
+  @override
+  State<_FiltersDialog> createState() => _FiltersDialogState();
+}
+
+class _FiltersDialogState extends State<_FiltersDialog> {
+  late LibraryFilters _f = widget.current;
+
+  void _set({
+    String? Function()? language,
+    RangeValues? Function()? years,
+    double? minRating,
+    String? Function()? director,
+    String? Function()? genre,
+  }) =>
+      setState(() => _f = (
+            language: language == null ? _f.language : language(),
+            years: years == null ? _f.years : years(),
+            minRating: minRating ?? _f.minRating,
+            director: director == null ? _f.director : director(),
+            genre: genre == null ? _f.genre : genre(),
+          ));
+
+  Widget _pick(String label, Set<String> options, String? value,
+      void Function(String?) onSelected) {
+    if (options.isEmpty) return const SizedBox.shrink();
+    final many = options.length > 12;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: DropdownMenu<String?>(
+        label: Text(label),
+        expandedInsets: EdgeInsets.zero,
+        menuHeight: 320,
+        initialSelection: options.contains(value) ? value : null,
+        enableFilter: many,
+        requestFocusOnTap: many,
+        dropdownMenuEntries: [
+          const DropdownMenuEntry(value: null, label: 'Any'),
+          for (final o in options.toList()..sort())
+            DropdownMenuEntry(value: o, label: o),
+        ],
+        onSelected: onSelected,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final languages = <String>{};
+    final years = <int>{};
+    final directors = <String>{};
+    final genres = <String>{};
+    for (final row in widget.rows) {
+      final (title, categoryId, year) = switch (row) {
+        VodItem v => (v.title, v.categoryId, v.year),
+        SeriesItem s => (s.title, s.categoryId, s.year),
+        _ => ('', '', null),
+      };
+      if (languageOf(title, widget.names[categoryId]) case final l?) {
+        languages.add(l);
+      }
+      if (year != null) years.add(year);
+      if (row is SeriesItem) {
+        directors.addAll(namesIn(row.director));
+        genres.addAll(namesIn(row.genre));
+      }
+    }
+    final first = (years.isEmpty ? 0 : years.reduce(min)).toDouble();
+    final last = (years.isEmpty ? 0 : years.reduce(max)).toDouble();
+    final range = _f.years ?? RangeValues(first, last);
+    final rating = _f.minRating;
+
+    return AlertDialog(
+      title: Text('More filters', style: heading(22)),
+      content: SizedBox(
+        width: 380,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 6),
+              _pick('Language', languages, _f.language,
+                  (v) => _set(language: () => v)),
+              _pick('Genre', genres, _f.genre, (v) => _set(genre: () => v)),
+              _pick('Director', directors, _f.director,
+                  (v) => _set(director: () => v)),
+              if (first < last) ...[
+                Text('Released ${range.start.round()} to ${range.end.round()}'),
+                RangeSlider(
+                  min: first,
+                  max: last,
+                  divisions: (last - first).round(),
+                  values: RangeValues(range.start.clamp(first, last),
+                      range.end.clamp(first, last)),
+                  labels: RangeLabels(
+                      '${range.start.round()}', '${range.end.round()}'),
+                  // The full span is no filter, so undated titles stay.
+                  onChanged: (r) => _set(
+                      years: () => r.start <= first && r.end >= last ? null : r),
+                ),
+              ],
+              Text(rating == 0
+                  ? 'Any rating'
+                  : 'Rated ${rating.toStringAsFixed(1)} or more'),
+              Slider(
+                max: 10,
+                divisions: 20,
+                value: rating,
+                label: rating.toStringAsFixed(1),
+                onChanged: (v) => _set(minRating: v),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, noFilters),
+          child: const Text('Clear'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _f),
+          child: const Text('Apply'),
+        ),
+      ],
+    );
   }
 }
 

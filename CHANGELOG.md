@@ -1,5 +1,9 @@
 # Changelog
 
+## Build 3 (1.0.1) - 2026-11-08
+
+- More filters in Movies and Series: language, release year, minimum rating, and genre and director for series.
+
 ## Build 2 (1.0.1) - 2026-11-07
 
 - Fixed the empty catch-up list, and video that kept playing after leaving a player that was still starting.

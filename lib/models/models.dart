@@ -112,6 +112,8 @@ class SeriesItem {
     this.year,
     this.rating,
     required this.sortOrder,
+    this.director,
+    this.genre,
   });
 
   final String id;
@@ -122,6 +124,10 @@ class SeriesItem {
   final int? year;
   final double? rating;
   final int sortOrder;
+
+  /// As the panel sends them, such as `Drama, Crime`. Only Xtream has these.
+  final String? director;
+  final String? genre;
 }
 
 /// One playable episode of a [SeriesItem].

@@ -171,6 +171,7 @@ Future<void> seed(AppDatabase db) async {
             year: 2021,
             rating: 8,
             sortOrder: i,
+            director: i == 1 ? 'Jane Doe' : null,
           ),
       ],
     ),
@@ -486,6 +487,28 @@ void main() {
     await finish(tester, db);
   });
 
+  testWidgets('more filters narrows the library and clears', (tester) async {
+    final db = await pumpApp(
+        tester, const Scaffold(body: LibraryTab(kind: CategoryKind.series)));
+    final all = find.byType(PosterCard).evaluate().length;
+    await tester.tap(find.text('More filters'));
+    await settle(tester);
+    await tester.tap(find.widgetWithText(DropdownMenu<String?>, 'Director'));
+    await settle(tester);
+    await tester.tap(find.text('Jane Doe').last);
+    await settle(tester);
+    await tester.tap(find.text('Apply'));
+    await settle(tester);
+    expect(find.byType(PosterCard), findsOneWidget);
+    expect(find.text('Harbor Sports'), findsWidgets);
+    await tester.tap(find.text('Filters on'));
+    await settle(tester);
+    await tester.tap(find.text('Clear'));
+    await settle(tester);
+    expect(find.byType(PosterCard).evaluate().length, all);
+    await finish(tester, db);
+  });
+
   testWidgets('a future programme takes a reminder', (tester) async {
     final db = await pumpApp(tester, const Scaffold(body: GuideTab()));
     await tester.tap(find.text('News').first);
@@ -681,6 +704,8 @@ void main() {
     await db.customStatement('DROP TABLE watch_progress');
     await db.customStatement('DROP TABLE recent_channels');
     await db.customStatement('ALTER TABLE channels DROP COLUMN archive_days');
+    await db.customStatement('ALTER TABLE series_items DROP COLUMN director');
+    await db.customStatement('ALTER TABLE series_items DROP COLUMN genre');
     await db.customStatement('PRAGMA user_version = 2');
     await db.close();
 

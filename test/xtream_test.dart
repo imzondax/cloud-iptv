@@ -88,6 +88,17 @@ void main() {
     expect(data.series, hasLength(3));
   });
 
+  test('keeps the director and genre of a series', () {
+    final data = parseXtreamCatalog(job(
+      series: '[{"series_id":2,"name":"Show","category_id":"4",'
+          '"director":"Jane Doe","genre":" Drama / Crime "},'
+          '{"series_id":3,"name":"Other","category_id":"4","director":""}]',
+    ));
+    expect(data.series.first.director, 'Jane Doe');
+    expect(data.series.first.genre, 'Drama / Crime');
+    expect(data.series.last.director, isNull);
+  });
+
   test('decodes base64 short EPG', () {
     String b(String s) => base64.encode(utf8.encode(s));
     final programs = parseShortEpg(

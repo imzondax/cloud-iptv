@@ -87,6 +87,8 @@ class SeriesItems extends Table {
   IntColumn get year => integer().nullable()();
   RealColumn get rating => real().nullable()();
   IntColumn get sortOrder => integer()();
+  TextColumn get director => text().nullable()();
+  TextColumn get genre => text().nullable()();
 
   /// Panels list an item once per category, under the same id.
   @override
@@ -219,7 +221,7 @@ class AppDatabase extends _$AppDatabase {
             ));
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -230,7 +232,10 @@ class AppDatabase extends _$AppDatabase {
               newColumns: [channels.archiveDays],
             ));
             await m.alterTable(TableMigration(vodItems));
-            await m.alterTable(TableMigration(seriesItems));
+            await m.alterTable(TableMigration(
+              seriesItems,
+              newColumns: [seriesItems.director, seriesItems.genre],
+            ));
             // Rows lost to the old key only come back with a full download.
             await update(sources).write(const SourcesCompanion(
               etag: Value(null),
@@ -268,6 +273,18 @@ class AppDatabase extends _$AppDatabase {
             await (delete(settings)
                   ..where((s) => s.key.equals('parental_unlocked')))
                 .go();
+          }
+          if (from < 6) {
+            // Version 1 databases got these columns in their rebuild above.
+            if (from >= 2) {
+              await m.addColumn(seriesItems, seriesItems.director);
+              await m.addColumn(seriesItems, seriesItems.genre);
+            }
+            // Directors and genres only arrive with a full download.
+            await update(sources).write(const SourcesCompanion(
+              etag: Value(null),
+              lastSyncedAt: Value(null),
+            ));
           }
         },
         // A PIN unlock lasts until the app closes.

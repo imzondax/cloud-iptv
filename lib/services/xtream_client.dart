@@ -282,6 +282,8 @@ PlaylistData parseXtreamCatalog(XtreamCatalogJob job) {
             _str(s['year']) ?? _str(s['releaseDate']) ?? _str(s['releasedate'])),
         rating: _double(s['rating']),
         sortOrder: series.length,
+        director: _str(s['director']),
+        genre: _str(s['genre']),
       ));
     }
   }

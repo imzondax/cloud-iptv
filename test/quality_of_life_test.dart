@@ -7,6 +7,7 @@ import 'package:cloud_iptv/services/playlist_backend.dart';
 import 'package:cloud_iptv/services/tmdb.dart';
 import 'package:cloud_iptv/services/updates.dart';
 import 'package:cloud_iptv/services/xtream_client.dart';
+import 'package:cloud_iptv/ui/library_tab.dart';
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -296,6 +297,8 @@ void main() {
     for (final t in ['favorite_titles', 'category_rules', 'reminders']) {
       await db.customStatement('DROP TABLE $t');
     }
+    await db.customStatement('ALTER TABLE series_items DROP COLUMN director');
+    await db.customStatement('ALTER TABLE series_items DROP COLUMN genre');
     await db.customStatement('PRAGMA user_version = 3');
     await db.close();
 
@@ -323,6 +326,8 @@ void main() {
     await db.saveSetting('volume', '40');
     await db.customStatement(
         'ALTER TABLE watch_progress DROP COLUMN category_id');
+    await db.customStatement('ALTER TABLE series_items DROP COLUMN director');
+    await db.customStatement('ALTER TABLE series_items DROP COLUMN genre');
     await db.customStatement('PRAGMA user_version = 4');
     await db.close();
 
@@ -348,5 +353,16 @@ void main() {
     db = AppDatabase(NativeDatabase(file));
     addTearDown(db.close);
     expect(await db.watchUnlocked().first, isFalse);
+  });
+
+  test('reads a language from title and category tags', () {
+    expect(languageOf('EN - Heat', null), 'EN');
+    expect(languageOf('[DE] Krimi', null), 'DE');
+    expect(languageOf('Heat', '|FR| Action'), 'FR');
+    expect(languageOf('ITA - Il Postino', 'EN | Movies'), 'ITA');
+    expect(languageOf('CSI: Miami', 'HD - Series'), isNull);
+    expect(languageOf('Up - The Movie', '4K Movies'), isNull);
+    expect(namesIn(' Drama, Crime / Action|'), ['Drama', 'Crime', 'Action']);
+    expect(namesIn(null), isEmpty);
   });
 }
