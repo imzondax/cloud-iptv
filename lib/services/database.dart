@@ -4,7 +4,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/models.dart';
 import 'playlist_backend.dart';
-import 'tmdb.dart' show CatalogTitle;
+import 'tmdb.dart' show CatalogTitle, titleKey;
 
 part 'database.g.dart';
 
@@ -190,6 +190,18 @@ class Settings extends Table {
   Set<Column> get primaryKey => {key};
 }
 
+/// Apart from the catalog, so a sync keeps what took long to look up.
+@UseRowClass(TitleDetail, generateInsertable: true)
+class TitleDetails extends Table {
+  TextColumn get key => text()();
+  TextColumn get language => text().nullable()();
+  TextColumn get studios => text().nullable()();
+  IntColumn get ageLimit => integer().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {key};
+}
+
 const favoritesCategoryId = '__favorites__';
 const _unlockedRule = '__unlocked__';
 
@@ -208,7 +220,7 @@ List<T> _uniqueById<T>(List<T> rows, String Function(T) id) {
 @DriftDatabase(tables: [
   Sources, Categories, Channels, VodItems, SeriesItems, EpgPrograms,
   StreamFallbacks, Favorites, Settings, WatchProgress, RecentChannels,
-  FavoriteTitles, CategoryRules, Reminders,
+  FavoriteTitles, CategoryRules, Reminders, TitleDetails,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor])
@@ -221,7 +233,7 @@ class AppDatabase extends _$AppDatabase {
             ));
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -281,6 +293,14 @@ class AppDatabase extends _$AppDatabase {
               await m.addColumn(seriesItems, seriesItems.genre);
             }
             // Directors and genres only arrive with a full download.
+            await update(sources).write(const SourcesCompanion(
+              etag: Value(null),
+              lastSyncedAt: Value(null),
+            ));
+          }
+          if (from < 7) {
+            await m.createTable(titleDetails);
+            // Movie years read from titles only arrive with a full download.
             await update(sources).write(const SourcesCompanion(
               etag: Value(null),
               lastSyncedAt: Value(null),
@@ -836,4 +856,32 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> saveSetting(String key, String value) => into(settings)
       .insertOnConflictUpdate(SettingsCompanion.insert(key: key, value: value));
+
+  // TMDB details
+
+  Stream<Map<String, TitleDetail>> watchTitleDetails() =>
+      select(titleDetails).watch().map((rows) => {for (final r in rows) r.key: r});
+
+  Future<void> saveTitleDetails(List<TitleDetail> details) =>
+      batch((b) => b.insertAllOnConflictUpdate(
+          titleDetails, details.map((d) => d.toInsertable())));
+
+  /// Every movie and series once, by [titleKey], with what a search needs.
+  Future<Map<String, ({String title, int? year, bool tv})>>
+      libraryTitles() async {
+    final out = <String, ({String title, int? year, bool tv})>{};
+    for (final (table, tv) in [('vod_items', false), ('series_items', true)]) {
+      final rows = await customSelect(
+        'SELECT DISTINCT title, year FROM $table',
+        readsFrom: {tv ? seriesItems : vodItems},
+      ).get();
+      for (final r in rows) {
+        final title = r.read<String>('title');
+        final year = r.readNullable<int>('year');
+        out[titleKey(tv: tv, title: title, year: year)] =
+            (title: title, year: year, tv: tv);
+      }
+    }
+    return out;
+  }
 }

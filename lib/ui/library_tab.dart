@@ -7,6 +7,7 @@ import '../models/models.dart';
 import '../providers/providers.dart';
 import '../services/database.dart';
 import '../services/playlist_backend.dart';
+import '../services/tmdb.dart' show titleKey;
 import 'player_screen.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -35,7 +36,8 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
   String? _picked;
   String _search = '';
   SeriesItem? _series;
-  LibraryFilters _filters = noFilters;
+  bool _panelClosed = false;
+  LibraryFilters _filters = const LibraryFilters();
 
   bool get _isSeries => widget.kind == CategoryKind.series;
   String get _savedCategory => 'category_${widget.kind.name}';
@@ -57,11 +59,17 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
     final rows = ref.watch(browseProvider(
         (kind: kind, categoryId: categoryId, search: _search)));
     final favorites = ref.watch(favoriteTitlesProvider(kind)).value ?? const {};
+    // Starts the TMDB lookups, without a rebuild for each step.
+    ref.listen(detailsLookupProvider, (_, _) {});
+    final details = ref.watch(titleDetailsProvider).value ?? const {};
     final categoryNames = {for (final c in categories) c.id: c.name};
     final all = rows.value ?? const [];
-    final shown = _filters == noFilters
+    final shown = _filters.isEmpty
         ? all
-        : all.where((r) => _matches(r, _filters, categoryNames)).toList();
+        : all
+            .where((r) =>
+                _filters.matches(factsOf(r, categoryNames, details)))
+            .toList();
     void toggle(String id) => ref
         .read(databaseProvider)
         .setFavoriteTitle(id, kind, !favorites.contains(id));
@@ -73,13 +81,16 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
           ? _series
           : null;
       final series = picked ??
-          (panel
+          (panel && !_panelClosed
               ? shown.whereType<SeriesItem>().firstOrNull
               : null);
 
       void openSeries(SeriesItem s) {
         if (panel) {
-          setState(() => _series = s);
+          setState(() {
+            _series = s;
+            _panelClosed = false;
+          });
         } else {
           showEpisodes(context, s);
         }
@@ -114,8 +125,8 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
                     if (picked != null) setState(() => _filters = picked);
                   },
                   icon: const Icon(Icons.tune, size: 18),
-                  label: Text(
-                      _filters == noFilters ? 'More filters' : 'Filters on'),
+                  label:
+                      Text(_filters.isEmpty ? 'More filters' : 'Filters on'),
                 ),
               ],
             ),
@@ -181,7 +192,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
         ),
       );
 
-      if (!panel) return grid;
+      if (!panel || _panelClosed) return grid;
       return Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -190,7 +201,14 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
             width: 440,
             child: series == null
                 ? const ColoredBox(color: OnAir.panel)
-                : _EpisodePanel(key: ValueKey(series.id), series: series),
+                : _EpisodePanel(
+                    key: ValueKey(series.id),
+                    series: series,
+                    onClose: () => setState(() {
+                      _series = null;
+                      _panelClosed = true;
+                    }),
+                  ),
           ),
         ],
       );
@@ -205,9 +223,8 @@ const _notLanguages = {
   'HD', 'SD', 'FHD', 'UHD', 'HDR', 'VIP', 'NEW', 'TOP', 'ALL', 'VOD', 'TV',
 };
 
-/// shortcut: guesses from tags only, so untagged libraries get no language
-/// filter and `IT - Chapter Two` reads as Italian. Upgrade to TMDB's
-/// original_language if that matters.
+/// The fallback for titles TMDB has not answered for. Guesses from tags, so
+/// `IT - Chapter Two` reads as Italian.
 String? languageOf(String title, String? category) {
   for (final text in [title, category ?? '']) {
     final code = _languageTag.firstMatch(text)?[1];
@@ -222,41 +239,85 @@ Iterable<String> namesIn(String? list) => (list ?? '')
     .map((n) => n.trim())
     .where((n) => n.isNotEmpty);
 
-typedef LibraryFilters = ({
-  String? language,
-  RangeValues? years,
-  double minRating,
-  String? director,
-  String? genre,
+/// Names for the original languages TMDB reports most. Others show as codes.
+const _languageNames = {
+  'en': 'English', 'no': 'Norwegian', 'nb': 'Norwegian', 'sv': 'Swedish',
+  'da': 'Danish', 'fi': 'Finnish', 'de': 'German', 'fr': 'French',
+  'es': 'Spanish', 'it': 'Italian', 'pt': 'Portuguese', 'nl': 'Dutch',
+  'pl': 'Polish', 'ru': 'Russian', 'tr': 'Turkish', 'ar': 'Arabic',
+  'hi': 'Hindi', 'ta': 'Tamil', 'te': 'Telugu', 'ja': 'Japanese',
+  'ko': 'Korean', 'zh': 'Chinese', 'cn': 'Cantonese', 'th': 'Thai',
+  'is': 'Icelandic', 'el': 'Greek', 'he': 'Hebrew', 'fa': 'Persian',
+};
+
+String languageName(String code) => _languageNames[code] ?? code.toUpperCase();
+
+/// The dropdown filters, each matching any of a title's values.
+const _facets = ['Language', 'Genre', 'Director', 'Studio'];
+
+typedef TitleFacts = ({
+  Map<String, Iterable<String>> tags,
+  int? year,
+  double rating,
+  int? age,
 });
 
-const LibraryFilters noFilters = (
-  language: null,
-  years: null,
-  minRating: 0,
-  director: null,
-  genre: null,
-);
-
-bool _matches(Object row, LibraryFilters f, Map<String, String> names) {
-  final (title, categoryId, year, rating) = switch (row) {
-    VodItem v => (v.title, v.categoryId, v.year, v.rating),
-    SeriesItem s => (s.title, s.categoryId, s.year, s.rating),
-    _ => ('', '', null, null),
+/// What the filters can see of a row: its own fields, then TMDB's details.
+TitleFacts factsOf(Object row, Map<String, String> categoryNames,
+    Map<String, TitleDetail> details) {
+  final (title, categoryId, year, rating, tv) = switch (row) {
+    VodItem v => (v.title, v.categoryId, v.year, v.rating, false),
+    SeriesItem s => (s.title, s.categoryId, s.year, s.rating, true),
+    _ => ('', '', null, null, false),
   };
+  final detail = details[titleKey(tv: tv, title: title, year: year)];
   final series = row is SeriesItem ? row : null;
-  final years = f.years;
-  return (f.language == null ||
-          languageOf(title, names[categoryId]) == f.language) &&
-      (years == null ||
-          (year != null && year >= years.start && year <= years.end)) &&
-      (rating ?? 0) >= f.minRating &&
-      (f.director == null || namesIn(series?.director).contains(f.director)) &&
-      (f.genre == null || namesIn(series?.genre).contains(f.genre));
+  final language = detail?.language ??
+      languageOf(title, categoryNames[categoryId])?.toLowerCase();
+  return (
+    tags: {
+      'Language': [?language],
+      'Genre': namesIn(series?.genre),
+      'Director': namesIn(series?.director),
+      'Studio': namesIn(detail?.studios),
+    },
+    year: year,
+    rating: rating ?? 0,
+    age: detail?.ageLimit,
+  );
 }
 
-/// Offers only the languages, years, directors and genres the rows contain.
-class _FiltersDialog extends StatefulWidget {
+class LibraryFilters {
+  const LibraryFilters({
+    this.picks = const {},
+    this.years,
+    this.minRating = 0,
+    this.maxAge,
+  });
+
+  /// A chosen value per facet, such as `{'Language': 'en'}`.
+  final Map<String, String> picks;
+  final RangeValues? years;
+  final double minRating;
+
+  /// Titles rated for this age or younger. Unrated titles drop out.
+  final int? maxAge;
+
+  bool get isEmpty =>
+      picks.isEmpty && years == null && minRating == 0 && maxAge == null;
+
+  bool matches(TitleFacts t) {
+    final (year, years, age, maxAge) = (t.year, this.years, t.age, this.maxAge);
+    return picks.entries.every((p) => t.tags[p.key]!.contains(p.value)) &&
+        (years == null ||
+            (year != null && year >= years.start && year <= years.end)) &&
+        t.rating >= minRating &&
+        (maxAge == null || (age != null && age <= maxAge));
+  }
+}
+
+/// Offers only the values the rows contain, and fills in as TMDB answers.
+class _FiltersDialog extends ConsumerStatefulWidget {
   const _FiltersDialog({
     required this.rows,
     required this.names,
@@ -268,34 +329,22 @@ class _FiltersDialog extends StatefulWidget {
   final LibraryFilters current;
 
   @override
-  State<_FiltersDialog> createState() => _FiltersDialogState();
+  ConsumerState<_FiltersDialog> createState() => _FiltersDialogState();
 }
 
-class _FiltersDialogState extends State<_FiltersDialog> {
-  late LibraryFilters _f = widget.current;
+class _FiltersDialogState extends ConsumerState<_FiltersDialog> {
+  late final _picks = {...widget.current.picks};
+  late RangeValues? _years = widget.current.years;
+  late double _minRating = widget.current.minRating;
+  late int? _maxAge = widget.current.maxAge;
 
-  void _set({
-    String? Function()? language,
-    RangeValues? Function()? years,
-    double? minRating,
-    String? Function()? director,
-    String? Function()? genre,
-  }) =>
-      setState(() => _f = (
-            language: language == null ? _f.language : language(),
-            years: years == null ? _f.years : years(),
-            minRating: minRating ?? _f.minRating,
-            director: director == null ? _f.director : director(),
-            genre: genre == null ? _f.genre : genre(),
-          ));
-
-  Widget _pick(String label, Set<String> options, String? value,
-      void Function(String?) onSelected) {
+  Widget _pick<T extends Object>(String label, Iterable<T> options, T? value,
+      String Function(T) name, void Function(T?) onSelected) {
     if (options.isEmpty) return const SizedBox.shrink();
     final many = options.length > 12;
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: DropdownMenu<String?>(
+      child: DropdownMenu<T?>(
         label: Text(label),
         expandedInsets: EdgeInsets.zero,
         menuHeight: 320,
@@ -303,40 +352,46 @@ class _FiltersDialogState extends State<_FiltersDialog> {
         enableFilter: many,
         requestFocusOnTap: many,
         dropdownMenuEntries: [
-          const DropdownMenuEntry(value: null, label: 'Any'),
-          for (final o in options.toList()..sort())
-            DropdownMenuEntry(value: o, label: o),
+          DropdownMenuEntry(value: null, label: 'Any'),
+          for (final o in options) DropdownMenuEntry(value: o, label: name(o)),
         ],
-        onSelected: onSelected,
+        onSelected: (v) => setState(() => onSelected(v)),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final languages = <String>{};
+    final details = ref.watch(titleDetailsProvider).value ?? const {};
+    final values = {for (final f in _facets) f: <String>{}};
     final years = <int>{};
-    final directors = <String>{};
-    final genres = <String>{};
+    final ages = <int>{};
     for (final row in widget.rows) {
-      final (title, categoryId, year) = switch (row) {
-        VodItem v => (v.title, v.categoryId, v.year),
-        SeriesItem s => (s.title, s.categoryId, s.year),
-        _ => ('', '', null),
-      };
-      if (languageOf(title, widget.names[categoryId]) case final l?) {
-        languages.add(l);
+      final t = factsOf(row, widget.names, details);
+      for (final f in _facets) {
+        values[f]!.addAll(t.tags[f]!);
       }
-      if (year != null) years.add(year);
-      if (row is SeriesItem) {
-        directors.addAll(namesIn(row.director));
-        genres.addAll(namesIn(row.genre));
-      }
+      if (t.year case final y?) years.add(y);
+      if (t.age case final a?) ages.add(a);
     }
     final first = (years.isEmpty ? 0 : years.reduce(min)).toDouble();
     final last = (years.isEmpty ? 0 : years.reduce(max)).toDouble();
-    final range = _f.years ?? RangeValues(first, last);
-    final rating = _f.minRating;
+    final range = _years ?? RangeValues(first, last);
+
+    final hasKey = (ref.watch(tmdbKeyProvider).value ?? '').isNotEmpty;
+    final lookup = ref.watch(detailsLookupProvider);
+    final status = switch (lookup) {
+      _ when !hasKey => 'Add a TMDB key in Sources to filter by language, '
+          'studio and age limit.',
+      AsyncError(:final error) => 'TMDB lookups stopped: ${safeError(error)}',
+      AsyncData(value: (:final done, :final total)) when done < total =>
+        'Looking up language, studio and age limit on TMDB: '
+            '$done of $total. Choices fill in as it goes.',
+      _ => null,
+    };
+
+    String Function(String) nameFor(String facet) =>
+        facet == 'Language' ? languageName : (s) => s;
 
     return AlertDialog(
       title: Text('More filters', style: heading(22)),
@@ -347,12 +402,29 @@ class _FiltersDialogState extends State<_FiltersDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (status != null) ...[
+                Text(status,
+                    style: const TextStyle(fontSize: 13, color: OnAir.muted)),
+                const SizedBox(height: 14),
+              ],
               const SizedBox(height: 6),
-              _pick('Language', languages, _f.language,
-                  (v) => _set(language: () => v)),
-              _pick('Genre', genres, _f.genre, (v) => _set(genre: () => v)),
-              _pick('Director', directors, _f.director,
-                  (v) => _set(director: () => v)),
+              for (final facet in _facets)
+                _pick<String>(
+                  facet,
+                  values[facet]!.toList()
+                    ..sort((a, b) =>
+                        nameFor(facet)(a).compareTo(nameFor(facet)(b))),
+                  _picks[facet],
+                  nameFor(facet),
+                  (v) => v == null ? _picks.remove(facet) : _picks[facet] = v,
+                ),
+              _pick<int>(
+                'Age limit',
+                ages.toList()..sort(),
+                _maxAge,
+                (a) => a == 0 ? 'All ages' : 'Up to $a',
+                (v) => _maxAge = v,
+              ),
               if (first < last) ...[
                 Text('Released ${range.start.round()} to ${range.end.round()}'),
                 RangeSlider(
@@ -364,19 +436,19 @@ class _FiltersDialogState extends State<_FiltersDialog> {
                   labels: RangeLabels(
                       '${range.start.round()}', '${range.end.round()}'),
                   // The full span is no filter, so undated titles stay.
-                  onChanged: (r) => _set(
-                      years: () => r.start <= first && r.end >= last ? null : r),
+                  onChanged: (r) => setState(() => _years =
+                      r.start <= first && r.end >= last ? null : r),
                 ),
               ],
-              Text(rating == 0
+              Text(_minRating == 0
                   ? 'Any rating'
-                  : 'Rated ${rating.toStringAsFixed(1)} or more'),
+                  : 'Rated ${_minRating.toStringAsFixed(1)} or more'),
               Slider(
                 max: 10,
                 divisions: 20,
-                value: rating,
-                label: rating.toStringAsFixed(1),
-                onChanged: (v) => _set(minRating: v),
+                value: _minRating,
+                label: _minRating.toStringAsFixed(1),
+                onChanged: (v) => setState(() => _minRating = v),
               ),
             ],
           ),
@@ -384,11 +456,19 @@ class _FiltersDialogState extends State<_FiltersDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context, noFilters),
+          onPressed: () => Navigator.pop(context, const LibraryFilters()),
           child: const Text('Clear'),
         ),
         FilledButton(
-          onPressed: () => Navigator.pop(context, _f),
+          onPressed: () => Navigator.pop(
+            context,
+            LibraryFilters(
+              picks: _picks,
+              years: _years,
+              minRating: _minRating,
+              maxAge: _maxAge,
+            ),
+          ),
           child: const Text('Apply'),
         ),
       ],
@@ -534,9 +614,12 @@ class _PosterButton extends StatelessWidget {
 }
 
 class _EpisodePanel extends ConsumerStatefulWidget {
-  const _EpisodePanel({super.key, required this.series});
+  const _EpisodePanel({super.key, required this.series, this.onClose});
 
   final SeriesItem series;
+
+  /// Shown as an X in the side panel. A bottom sheet closes on its own.
+  final VoidCallback? onClose;
 
   @override
   ConsumerState<_EpisodePanel> createState() => _EpisodePanelState();
@@ -595,6 +678,17 @@ class _EpisodePanelState extends ConsumerState<_EpisodePanel> {
                     ],
                   ),
                 ),
+                if (widget.onClose case final close?)
+                  // As tall as the poster, so the X sits at its top.
+                  Container(
+                    height: 138,
+                    alignment: Alignment.topRight,
+                    child: IconButton(
+                      tooltip: 'Close',
+                      onPressed: close,
+                      icon: const Icon(Icons.close),
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 18),

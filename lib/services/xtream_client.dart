@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show compute;
 
 import '../models/models.dart';
 import 'playlist_backend.dart';
+import 'tmdb.dart' show yearInTitle;
 
 /// Thin wrapper over `player_api.php`. Responses stay raw strings here so
 /// decoding and mapping happen in [parseXtreamCatalog] off the main isolate.
@@ -259,8 +260,10 @@ PlaylistData parseXtreamCatalog(XtreamCatalogJob job) {
         posterUrl: _str(s['stream_icon']),
         streamUrl: '${job.baseUrl}/movie/$user/$pass/$id.$ext',
         categoryId: categoryId,
-        year: _year(
-            _str(s['year']) ?? _str(s['releaseDate']) ?? _str(s['releasedate'])),
+        year: _year(_str(s['year']) ??
+                _str(s['releaseDate']) ??
+                _str(s['releasedate'])) ??
+            yearInTitle(_str(s['name']) ?? ''),
         rating: _double(s['rating']),
         sortOrder: vod.length,
       ));

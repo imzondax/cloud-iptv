@@ -4272,6 +4272,234 @@ class RemindersCompanion extends UpdateCompanion<Reminder> {
   }
 }
 
+class $TitleDetailsTable extends TitleDetails
+    with TableInfo<$TitleDetailsTable, TitleDetail> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $TitleDetailsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _keyMeta = const VerificationMeta('key');
+  @override
+  late final GeneratedColumn<String> key = GeneratedColumn<String>(
+    'key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _languageMeta = const VerificationMeta(
+    'language',
+  );
+  @override
+  late final GeneratedColumn<String> language = GeneratedColumn<String>(
+    'language',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _studiosMeta = const VerificationMeta(
+    'studios',
+  );
+  @override
+  late final GeneratedColumn<String> studios = GeneratedColumn<String>(
+    'studios',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _ageLimitMeta = const VerificationMeta(
+    'ageLimit',
+  );
+  @override
+  late final GeneratedColumn<int> ageLimit = GeneratedColumn<int>(
+    'age_limit',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [key, language, studios, ageLimit];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'title_details';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<TitleDetail> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('key')) {
+      context.handle(
+        _keyMeta,
+        key.isAcceptableOrUnknown(data['key']!, _keyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_keyMeta);
+    }
+    if (data.containsKey('language')) {
+      context.handle(
+        _languageMeta,
+        language.isAcceptableOrUnknown(data['language']!, _languageMeta),
+      );
+    }
+    if (data.containsKey('studios')) {
+      context.handle(
+        _studiosMeta,
+        studios.isAcceptableOrUnknown(data['studios']!, _studiosMeta),
+      );
+    }
+    if (data.containsKey('age_limit')) {
+      context.handle(
+        _ageLimitMeta,
+        ageLimit.isAcceptableOrUnknown(data['age_limit']!, _ageLimitMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {key};
+  @override
+  TitleDetail map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return TitleDetail(
+      key: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}key'],
+      )!,
+      language: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}language'],
+      ),
+      studios: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}studios'],
+      ),
+      ageLimit: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}age_limit'],
+      ),
+    );
+  }
+
+  @override
+  $TitleDetailsTable createAlias(String alias) {
+    return $TitleDetailsTable(attachedDatabase, alias);
+  }
+}
+
+class TitleDetailsCompanion extends UpdateCompanion<TitleDetail> {
+  final Value<String> key;
+  final Value<String?> language;
+  final Value<String?> studios;
+  final Value<int?> ageLimit;
+  final Value<int> rowid;
+  const TitleDetailsCompanion({
+    this.key = const Value.absent(),
+    this.language = const Value.absent(),
+    this.studios = const Value.absent(),
+    this.ageLimit = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  TitleDetailsCompanion.insert({
+    required String key,
+    this.language = const Value.absent(),
+    this.studios = const Value.absent(),
+    this.ageLimit = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : key = Value(key);
+  static Insertable<TitleDetail> custom({
+    Expression<String>? key,
+    Expression<String>? language,
+    Expression<String>? studios,
+    Expression<int>? ageLimit,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (key != null) 'key': key,
+      if (language != null) 'language': language,
+      if (studios != null) 'studios': studios,
+      if (ageLimit != null) 'age_limit': ageLimit,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  TitleDetailsCompanion copyWith({
+    Value<String>? key,
+    Value<String?>? language,
+    Value<String?>? studios,
+    Value<int?>? ageLimit,
+    Value<int>? rowid,
+  }) {
+    return TitleDetailsCompanion(
+      key: key ?? this.key,
+      language: language ?? this.language,
+      studios: studios ?? this.studios,
+      ageLimit: ageLimit ?? this.ageLimit,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (key.present) {
+      map['key'] = Variable<String>(key.value);
+    }
+    if (language.present) {
+      map['language'] = Variable<String>(language.value);
+    }
+    if (studios.present) {
+      map['studios'] = Variable<String>(studios.value);
+    }
+    if (ageLimit.present) {
+      map['age_limit'] = Variable<int>(ageLimit.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TitleDetailsCompanion(')
+          ..write('key: $key, ')
+          ..write('language: $language, ')
+          ..write('studios: $studios, ')
+          ..write('ageLimit: $ageLimit, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class _$TitleDetailInsertable implements Insertable<TitleDetail> {
+  TitleDetail _object;
+  _$TitleDetailInsertable(this._object);
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    return TitleDetailsCompanion(
+      key: Value(_object.key),
+      language: Value(_object.language),
+      studios: Value(_object.studios),
+      ageLimit: Value(_object.ageLimit),
+    ).toColumns(false);
+  }
+}
+
+extension TitleDetailToInsertable on TitleDetail {
+  _$TitleDetailInsertable toInsertable() {
+    return _$TitleDetailInsertable(this);
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -4291,6 +4519,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $FavoriteTitlesTable favoriteTitles = $FavoriteTitlesTable(this);
   late final $CategoryRulesTable categoryRules = $CategoryRulesTable(this);
   late final $RemindersTable reminders = $RemindersTable(this);
+  late final $TitleDetailsTable titleDetails = $TitleDetailsTable(this);
   late final Index categoriesKind = Index(
     'categories_kind',
     'CREATE INDEX categories_kind ON categories (kind)',
@@ -4338,6 +4567,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     favoriteTitles,
     categoryRules,
     reminders,
+    titleDetails,
     categoriesKind,
     channelsCategory,
     channelsSource,
@@ -7279,6 +7509,196 @@ typedef $$RemindersTableProcessedTableManager =
       Reminder,
       PrefetchHooks Function()
     >;
+typedef $$TitleDetailsTableCreateCompanionBuilder =
+    TitleDetailsCompanion Function({
+      required String key,
+      Value<String?> language,
+      Value<String?> studios,
+      Value<int?> ageLimit,
+      Value<int> rowid,
+    });
+typedef $$TitleDetailsTableUpdateCompanionBuilder =
+    TitleDetailsCompanion Function({
+      Value<String> key,
+      Value<String?> language,
+      Value<String?> studios,
+      Value<int?> ageLimit,
+      Value<int> rowid,
+    });
+
+class $$TitleDetailsTableFilterComposer
+    extends Composer<_$AppDatabase, $TitleDetailsTable> {
+  $$TitleDetailsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get key => $composableBuilder(
+    column: $table.key,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get language => $composableBuilder(
+    column: $table.language,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get studios => $composableBuilder(
+    column: $table.studios,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get ageLimit => $composableBuilder(
+    column: $table.ageLimit,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$TitleDetailsTableOrderingComposer
+    extends Composer<_$AppDatabase, $TitleDetailsTable> {
+  $$TitleDetailsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get key => $composableBuilder(
+    column: $table.key,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get language => $composableBuilder(
+    column: $table.language,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get studios => $composableBuilder(
+    column: $table.studios,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get ageLimit => $composableBuilder(
+    column: $table.ageLimit,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$TitleDetailsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $TitleDetailsTable> {
+  $$TitleDetailsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get key =>
+      $composableBuilder(column: $table.key, builder: (column) => column);
+
+  GeneratedColumn<String> get language =>
+      $composableBuilder(column: $table.language, builder: (column) => column);
+
+  GeneratedColumn<String> get studios =>
+      $composableBuilder(column: $table.studios, builder: (column) => column);
+
+  GeneratedColumn<int> get ageLimit =>
+      $composableBuilder(column: $table.ageLimit, builder: (column) => column);
+}
+
+class $$TitleDetailsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $TitleDetailsTable,
+          TitleDetail,
+          $$TitleDetailsTableFilterComposer,
+          $$TitleDetailsTableOrderingComposer,
+          $$TitleDetailsTableAnnotationComposer,
+          $$TitleDetailsTableCreateCompanionBuilder,
+          $$TitleDetailsTableUpdateCompanionBuilder,
+          (
+            TitleDetail,
+            BaseReferences<_$AppDatabase, $TitleDetailsTable, TitleDetail>,
+          ),
+          TitleDetail,
+          PrefetchHooks Function()
+        > {
+  $$TitleDetailsTableTableManager(_$AppDatabase db, $TitleDetailsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$TitleDetailsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$TitleDetailsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$TitleDetailsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> key = const Value.absent(),
+                Value<String?> language = const Value.absent(),
+                Value<String?> studios = const Value.absent(),
+                Value<int?> ageLimit = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => TitleDetailsCompanion(
+                key: key,
+                language: language,
+                studios: studios,
+                ageLimit: ageLimit,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String key,
+                Value<String?> language = const Value.absent(),
+                Value<String?> studios = const Value.absent(),
+                Value<int?> ageLimit = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => TitleDetailsCompanion.insert(
+                key: key,
+                language: language,
+                studios: studios,
+                ageLimit: ageLimit,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$TitleDetailsTable, TitleDetail>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $TitleDetailsTable,
+                    TitleDetail
+                  >(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$TitleDetailsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $TitleDetailsTable,
+      TitleDetail,
+      $$TitleDetailsTableFilterComposer,
+      $$TitleDetailsTableOrderingComposer,
+      $$TitleDetailsTableAnnotationComposer,
+      $$TitleDetailsTableCreateCompanionBuilder,
+      $$TitleDetailsTableUpdateCompanionBuilder,
+      (
+        TitleDetail,
+        BaseReferences<_$AppDatabase, $TitleDetailsTable, TitleDetail>,
+      ),
+      TitleDetail,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -7311,4 +7731,6 @@ class $AppDatabaseManager {
       $$CategoryRulesTableTableManager(_db, _db.categoryRules);
   $$RemindersTableTableManager get reminders =>
       $$RemindersTableTableManager(_db, _db.reminders);
+  $$TitleDetailsTableTableManager get titleDetails =>
+      $$TitleDetailsTableTableManager(_db, _db.titleDetails);
 }

@@ -1,7 +1,7 @@
 import 'package:dio/dio.dart';
 
 /// Keep in step with `version` in pubspec.yaml; a test checks that it is.
-const appVersion = '1.0.2';
+const appVersion = '1.0.3';
 
 const releasesUrl = 'https://github.com/imzondax/cloud-iptv/releases/latest';
 const _latestRelease =

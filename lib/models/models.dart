@@ -177,3 +177,25 @@ class StreamFallback {
   final String url;
   final int priority;
 }
+
+/// What TMDB knows about a movie or series, under [titleKey]. A row with
+/// only the key means TMDB found nothing, so the title is not asked again.
+class TitleDetail {
+  const TitleDetail({
+    required this.key,
+    this.language,
+    this.studios,
+    this.ageLimit,
+  });
+
+  final String key;
+
+  /// ISO 639-1 code of the original language, such as `en`.
+  final String? language;
+
+  /// Production companies, comma separated.
+  final String? studios;
+
+  /// The lowest age allowed to watch, from the Norwegian or US rating.
+  final int? ageLimit;
+}

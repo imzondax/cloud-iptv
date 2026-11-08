@@ -110,6 +110,92 @@ Future<String?> searchTmdbPoster(Dio dio, String key,
   return null;
 }
 
+/// One key per movie or series, however the provider spells or tags it.
+String titleKey({required bool tv, required String title, int? year}) =>
+    '${tv ? 'tv' : 'movie'}:${normalizeTitle(title)}:${year ?? ''}';
+
+/// Language, studios and age limit for one title, or a bare row when TMDB
+/// has no match. Network errors throw, so those titles are tried again.
+Future<TitleDetail> fetchTmdbDetails(Dio dio, String apiKey,
+    {required String key,
+    required String title,
+    int? year,
+    required bool tv}) async {
+  final token = apiKey.contains('.');
+  Future<Map<String, dynamic>> get(String path, Map<String, String> q) async =>
+      (await dio.get<Map<String, dynamic>>(
+        'https://api.themoviedb.org/3/$path',
+        queryParameters: {...q, if (!token) 'api_key': apiKey},
+        options:
+            Options(headers: {if (token) 'Authorization': 'Bearer $apiKey'}),
+      ))
+          .data ??
+      const {};
+  final kind = tv ? 'tv' : 'movie';
+  final found = await get('search/$kind', {
+    'query': searchableTitle(title),
+    if (year != null) (tv ? 'first_air_date_year' : 'year'): '$year',
+  });
+  final results = found['results'];
+  final first = results is List
+      ? results.whereType<Map<String, dynamic>>().firstOrNull
+      : null;
+  if (first == null) return TitleDetail(key: key);
+  final details = await get('$kind/${first['id']}', {
+    'append_to_response': tv ? 'content_ratings' : 'release_dates',
+  });
+  return parseTmdbDetails(key, details);
+}
+
+/// Reads a TMDB movie or TV details body, with its ratings appended.
+TitleDetail parseTmdbDetails(String key, Map<String, dynamic> body) {
+  final ratings = <String, String>{};
+  // TV: content_ratings.results[].rating. Movies: one per release.
+  for (final r in _maps((body['content_ratings'] as Map?)?['results'])) {
+    if (r['rating'] case final String rating when rating.isNotEmpty) {
+      ratings.putIfAbsent('${r['iso_3166_1']}', () => rating);
+    }
+  }
+  for (final country in _maps((body['release_dates'] as Map?)?['results'])) {
+    for (final r in _maps(country['release_dates'])) {
+      if (r['certification'] case final String c when c.isNotEmpty) {
+        ratings.putIfAbsent('${country['iso_3166_1']}', () => c);
+      }
+    }
+  }
+  final studios = [
+    for (final c in _maps(body['production_companies']))
+      if (c['name'] case final String name when name.isNotEmpty) name,
+  ].take(3).join(', ');
+  return TitleDetail(
+    key: key,
+    language: switch (body['original_language']) {
+      final String l when l.isNotEmpty => l,
+      _ => null,
+    },
+    studios: studios.isEmpty ? null : studios,
+    ageLimit: ageFromRating(ratings['NO']) ?? ageFromRating(ratings['US']),
+  );
+}
+
+Iterable<Map> _maps(Object? list) =>
+    list is List ? list.whereType<Map>() : const [];
+
+/// shortcut: US letters map to the age they roughly mean; extend the table
+/// for other countries if Norway and the US both lack a rating.
+const _usAges = {
+  'G': 0, 'TV-Y': 0, 'TV-G': 0, 'TV-Y7': 7, 'PG': 10, 'TV-PG': 10,
+  'PG-13': 13, 'TV-14': 14, 'R': 17, 'TV-MA': 17, 'NC-17': 18,
+};
+
+/// Norway's `A`, `6` … `18`, or a US rating, as the lowest allowed age.
+int? ageFromRating(String? rating) {
+  if (rating == null) return null;
+  if (rating == 'A') return 0;
+  return _usAges[rating] ??
+      int.tryParse(RegExp(r'\d+').firstMatch(rating)?[0] ?? '');
+}
+
 /// The title a search should use: the provider's, without its tags.
 String searchableTitle(String raw) {
   var t = raw.trim();
@@ -117,7 +203,11 @@ String searchableTitle(String raw) {
   while (_tagPrefix.hasMatch(t)) {
     t = t.replaceFirst(_tagPrefix, '');
   }
-  t = t.replaceAll(_bracketed, ' ').replaceFirst(_qualitySuffix, '').trim();
+  t = t
+      .replaceAll(_bracketed, ' ')
+      .replaceFirst(_releaseTags, '')
+      .replaceFirst(_qualitySuffix, '')
+      .trim();
   return t.replaceFirst(_trailingYear, '');
 }
 
@@ -155,6 +245,9 @@ final _bracketed = RegExp(r'[\[(][^\])]*[\])]');
 final _qualitySuffix = RegExp(r'\s+(4k|uhd|fhd|hd|sd|hevc|multi[- ]?(sub|audio))\s*$',
     caseSensitive: false);
 final _trailingYear = RegExp(r'\s+(19|20)\d\d$');
+// Capitals only, so a title such as `The French` keeps its last word.
+final _releaseTags = RegExp(r'(\s+(NORDIC|REPACK|HYBRID|SUBBED|DUBBED|INTERNAL|'
+    r'FRENCH|SUBFRENCH|FLEMISH|DANISH|NORWEGIAN|SWEDISH|FINNISH|DL))+\s*$');
 final _punctuation = RegExp(r'[^\p{L}\p{N}]+', unicode: true);
 final _yearInTitle = RegExp(r'[\[(]((?:19|20)\d\d)[\])]|\s((?:19|20)\d\d)\s*$');
 
@@ -166,11 +259,13 @@ String normalizeTitle(String raw) {
   return t.startsWith('the ') ? t.substring(4) : t;
 }
 
-int? _yearOf(CatalogTitle item) {
-  if (item.year != null) return item.year;
-  final match = _yearInTitle.firstMatch(item.title);
+/// A year written into a title, as in `Heat (1995)` or `Heat 1995`.
+int? yearInTitle(String title) {
+  final match = _yearInTitle.firstMatch(title);
   return match == null ? null : int.parse(match[1] ?? match[2]!);
 }
+
+int? _yearOf(CatalogTitle item) => item.year ?? yearInTitle(item.title);
 
 /// The catalog ids of [wanted], in its order, leaving out what is not there.
 /// A known year must agree, or remakes would stand in for the original. Runs

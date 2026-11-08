@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show compute;
 
 import '../models/models.dart';
 import 'playlist_backend.dart';
+import 'tmdb.dart' show yearInTitle;
 
 class M3uBackend implements PlaylistBackend {
   M3uBackend(this._dio);
@@ -114,6 +115,7 @@ Future<PlaylistData> parseM3uLines(Stream<String> lines, int sourceId) async {
           posterUrl: logo,
           streamUrl: line,
           categoryId: categoryId,
+          year: yearInTitle(name),
           sortOrder: vod.length,
         ));
       } else {

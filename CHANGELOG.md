@@ -1,5 +1,10 @@
 # Changelog
 
+## Build 4 (1.0.3) - 2026-11-08
+
+- More filters: language, studio and age limit from TMDB, and release year for movies.
+- Close the series panel with the X button.
+
 ## Build 3 (1.0.2) - 2026-11-08
 
 - More filters in Movies and Series: language, release year, minimum rating, and genre and director for series.

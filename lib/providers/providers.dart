@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
@@ -174,6 +175,51 @@ final fallbackPosterProvider = FutureProvider.autoDispose
     return null;
   }
 });
+
+final titleDetailsProvider = StreamProvider(
+    (ref) => ref.watch(databaseProvider).watchTitleDetails());
+
+typedef LookupProgress = ({int done, int total});
+
+/// Fetches TMDB details for each title without them, a few at once, which
+/// stays under TMDB's rate limit. Saved details stay, so a restart resumes.
+final detailsLookupProvider = StreamProvider<LookupProgress>((ref) async* {
+  final apiKey = await ref.watch(tmdbKeyProvider.future);
+  if (apiKey == null || apiKey.isEmpty) return;
+  final db = ref.read(databaseProvider);
+  final dio = ref.read(dioProvider);
+  final known = (await db.watchTitleDetails().first).keys.toSet();
+  final todo = [
+    for (final e in (await db.libraryTitles()).entries)
+      if (!known.contains(e.key)) e,
+  ];
+  final found = <TitleDetail>[];
+  yield (done: 0, total: todo.length);
+  for (var i = 0; i < todo.length; i += _lookupsAtOnce) {
+    var throttled = false;
+    await Future.wait([
+      for (final e in todo.skip(i).take(_lookupsAtOnce))
+        fetchTmdbDetails(dio, apiKey,
+                key: e.key, title: e.value.title, year: e.value.year,
+                tv: e.value.tv)
+            .then(found.add, onError: (Object error) {
+          final status = error is DioException ? error.response?.statusCode : null;
+          if (status == 401) throw const PlaylistException('TMDB rejected this key');
+          if (status == 429) throttled = true;
+          // Anything else is tried again on the next run.
+        }),
+    ]);
+    // Saved in groups, as each save rebuilds the library's filters.
+    if (found.length >= 200 || i + _lookupsAtOnce >= todo.length) {
+      await db.saveTitleDetails([...found]);
+      found.clear();
+    }
+    yield (done: min(i + _lookupsAtOnce, todo.length), total: todo.length);
+    if (throttled) await Future<void>.delayed(const Duration(seconds: 5));
+  }
+});
+
+const _lookupsAtOnce = 8;
 
 final keepWatchingProvider = StreamProvider(
     (ref) => ref.watch(databaseProvider).watchKeepWatching(_shelfSize));

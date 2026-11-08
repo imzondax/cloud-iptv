@@ -299,6 +299,7 @@ void main() {
     }
     await db.customStatement('ALTER TABLE series_items DROP COLUMN director');
     await db.customStatement('ALTER TABLE series_items DROP COLUMN genre');
+    await db.customStatement('DROP TABLE title_details');
     await db.customStatement('PRAGMA user_version = 3');
     await db.close();
 
@@ -328,6 +329,7 @@ void main() {
         'ALTER TABLE watch_progress DROP COLUMN category_id');
     await db.customStatement('ALTER TABLE series_items DROP COLUMN director');
     await db.customStatement('ALTER TABLE series_items DROP COLUMN genre');
+    await db.customStatement('DROP TABLE title_details');
     await db.customStatement('PRAGMA user_version = 4');
     await db.close();
 
@@ -353,6 +355,47 @@ void main() {
     db = AppDatabase(NativeDatabase(file));
     addTearDown(db.close);
     expect(await db.watchUnlocked().first, isFalse);
+  });
+
+  test('reads language, studios and age from TMDB details', () {
+    final movie = parseTmdbDetails('k', {
+      'original_language': 'fr',
+      'production_companies': [
+        {'name': 'Gaumont'}, {'name': 'Canal+'}, {'name': 'TF1'}, {'name': 'X'},
+      ],
+      'release_dates': {
+        'results': [
+          {'iso_3166_1': 'US', 'release_dates': [{'certification': 'R'}]},
+          {
+            'iso_3166_1': 'NO',
+            'release_dates': [{'certification': ''}, {'certification': '15'}],
+          },
+        ],
+      },
+    });
+    expect(movie.language, 'fr');
+    expect(movie.studios, 'Gaumont, Canal+, TF1');
+    expect(movie.ageLimit, 15);
+
+    final show = parseTmdbDetails('k', {
+      'original_language': 'en',
+      'production_companies': <Object>[],
+      'content_ratings': {
+        'results': [{'iso_3166_1': 'US', 'rating': 'TV-14'}],
+      },
+    });
+    expect(show.studios, isNull);
+    expect(show.ageLimit, 14);
+    expect(parseTmdbDetails('k', {}).ageLimit, isNull);
+
+    expect(ageFromRating('A'), 0);
+    expect(ageFromRating('PG-13'), 13);
+    expect(ageFromRating('NR'), isNull);
+    expect(titleKey(tv: false, title: 'EN - The Matrix (1999)', year: 1999),
+        titleKey(tv: false, title: 'Matrix', year: 1999));
+    expect(searchableTitle('Orange Justice NORDIC REPACK (2026)'),
+        'Orange Justice');
+    expect(searchableTitle('The French'), 'The French');
   });
 
   test('reads a language from title and category tags', () {

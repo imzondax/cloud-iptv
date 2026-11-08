@@ -88,6 +88,15 @@ void main() {
     expect(data.series, hasLength(3));
   });
 
+  test('reads a missing movie year from the title', () {
+    final data = parseXtreamCatalog(job(
+      vod: '[{"stream_id":1,"name":"Bury Him (2024)","year":""},'
+          '{"stream_id":2,"name":"2012 (2009)"},'
+          '{"stream_id":3,"name":"Heat","year":"1995"}]',
+    ));
+    expect(data.vod.map((v) => v.year), [2024, 2009, 1995]);
+  });
+
   test('keeps the director and genre of a series', () {
     final data = parseXtreamCatalog(job(
       series: '[{"series_id":2,"name":"Show","category_id":"4",'

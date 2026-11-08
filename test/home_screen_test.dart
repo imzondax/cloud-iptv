@@ -487,6 +487,79 @@ void main() {
     await finish(tester, db);
   });
 
+  testWidgets('the X closes the series panel until a series is picked',
+      (tester) async {
+    final db = await pumpApp(
+        tester, const Scaffold(body: LibraryTab(kind: CategoryKind.series)));
+    expect(find.text('Episode title number 1'), findsOneWidget);
+    await tester.tap(find.byTooltip('Close'));
+    await settle(tester);
+    expect(find.text('Episode title number 1'), findsNothing);
+    await tester.tap(find.byType(PosterCard).at(1));
+    await settle(tester);
+    expect(find.text('Episode title number 1'), findsOneWidget);
+    await finish(tester, db);
+  });
+
+  testWidgets('TMDB details filter movies by language, studio and age',
+      (tester) async {
+    final db = await pumpApp(
+        tester, const Scaffold(body: LibraryTab(kind: CategoryKind.vod)));
+    String movie(String title, int year) =>
+        titleKey(tv: false, title: title, year: year);
+    await tester.runAsync(() => db.saveTitleDetails([
+          TitleDetail(
+              key: movie('Nordlys News', 2020),
+              language: 'no',
+              studios: 'Fjord Films',
+              ageLimit: 12),
+          TitleDetail(
+              key: movie('Harbor Sports', 2021),
+              language: 'no',
+              studios: 'Harbor Pictures',
+              ageLimit: 18),
+        ]));
+    await settle(tester);
+
+    Future<void> choose(String label, String option) async {
+      await tester.tap(find.widgetWithText(DropdownMenu<String?>, label));
+      await settle(tester);
+      await tester.tap(find.text(option).last);
+      await settle(tester);
+    }
+
+    await tester.tap(find.text('More filters'));
+    await settle(tester);
+    await choose('Language', 'Norwegian');
+    await tester.tap(find.text('Apply'));
+    await settle(tester);
+    expect(find.byType(PosterCard), findsNWidgets(2));
+
+    await tester.tap(find.text('Filters on'));
+    await settle(tester);
+    await tester.tap(find.widgetWithText(DropdownMenu<int?>, 'Age limit'));
+    await settle(tester);
+    await tester.tap(find.text('Up to 12').last);
+    await settle(tester);
+    await tester.tap(find.text('Apply'));
+    await settle(tester);
+    expect(find.byType(PosterCard), findsOneWidget);
+    expect(find.text('Nordlys News'), findsWidgets);
+
+    await tester.tap(find.text('Filters on'));
+    await settle(tester);
+    await tester.tap(find.text('Clear'));
+    await settle(tester);
+    await tester.tap(find.text('More filters'));
+    await settle(tester);
+    await choose('Studio', 'Harbor Pictures');
+    await tester.tap(find.text('Apply'));
+    await settle(tester);
+    expect(find.byType(PosterCard), findsOneWidget);
+    expect(find.text('Harbor Sports'), findsWidgets);
+    await finish(tester, db);
+  });
+
   testWidgets('more filters narrows the library and clears', (tester) async {
     final db = await pumpApp(
         tester, const Scaffold(body: LibraryTab(kind: CategoryKind.series)));
@@ -706,6 +779,7 @@ void main() {
     await db.customStatement('ALTER TABLE channels DROP COLUMN archive_days');
     await db.customStatement('ALTER TABLE series_items DROP COLUMN director');
     await db.customStatement('ALTER TABLE series_items DROP COLUMN genre');
+    await db.customStatement('DROP TABLE title_details');
     await db.customStatement('PRAGMA user_version = 2');
     await db.close();
 
