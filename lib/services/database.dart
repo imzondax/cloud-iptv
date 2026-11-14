@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import '../models/models.dart';
 import 'playlist_backend.dart';
 import 'tmdb.dart' show CatalogTitle, titleKey;
+import 'xtream_client.dart' show loginPlaceholder, withLogin;
 
 part 'database.g.dart';
 
@@ -15,9 +16,9 @@ class Sources extends Table {
   TextColumn get name => text()();
   TextColumn get url => text()();
   TextColumn get username => text().nullable()();
-  // shortcut: plain text here and inside stored stream URLs, protected only by
-  // the user's account. Use the system keychain if the app holds other people's
-  // logins; URLs would then have to be built at play time.
+
+  /// Empty: passwords live in the system keychain (see `Secrets`). Only one
+  /// the keychain could not take waits here, until `moveLoginsToKeychain`.
   TextColumn get password => text().nullable()();
   TextColumn get epgUrl => text().nullable()();
   TextColumn get etag => text().nullable()();
@@ -128,8 +129,6 @@ class Favorites extends Table {
 
 /// Where a movie or episode was left. A snapshot, because episodes are not
 /// stored in the catalog.
-// shortcut: streamUrl keeps the login it was saved with, so editing a source's
-// password leaves old entries unplayable until they are watched again.
 class WatchProgress extends Table {
   TextColumn get itemId => text()();
   IntColumn get sourceId => integer()();
@@ -210,6 +209,14 @@ typedef SourceStats = ({int live, int movies, int series, int guide});
 
 // shortcut: search shows the first 500 matches, add paging if users need more.
 const _searchLimit = 500;
+
+/// [column] holds [search], ignoring case. SQLite's LIKE only folds A to Z,
+/// so both cases of the search are tried, and its wildcards are escaped.
+Expression<bool> _containsText(GeneratedColumn<String> column, String search) {
+  final text = search.replaceAllMapped(RegExp(r'[\\%_]'), (m) => '\\${m[0]}');
+  Expression<bool> like(String s) => column.like('%$s%', escapeChar: r'\');
+  return like(text.toLowerCase()) | like(text.toUpperCase());
+}
 
 /// Search and favourites span categories, where one item has several rows.
 List<T> _uniqueById<T>(List<T> rows, String Function(T) id) {
@@ -395,6 +402,56 @@ class AppDatabase extends _$AppDatabase {
         );
       });
 
+  /// Live channels ahead of the rest of a first sync, so the list fills
+  /// sooner. [replaceCatalog] then writes the whole catalog as usual.
+  Future<void> addLiveChannels(Source source, PlaylistData live) =>
+      transaction(() async {
+        final current = await (select(sources)
+              ..where((s) => s.id.equals(source.id)))
+            .getSingleOrNull();
+        if (current == null) return;
+        await batch((b) {
+          const mode = InsertMode.insertOrReplace;
+          b.insertAll(categories, live.categories.map((e) => e.toInsertable()),
+              mode: mode);
+          b.insertAll(channels, live.channels.map((e) => e.toInsertable()),
+              mode: mode);
+          b.insertAll(streamFallbacks,
+              live.fallbacks.map((e) => e.toInsertable()), mode: mode);
+        });
+      });
+
+  /// Swaps [password] and the username in stored stream URLs for
+  /// [loginPlaceholder], and clears the password column.
+  Future<void> forgetLogin(Source source, String password) =>
+      transaction(() async {
+        if (source.type == BackendType.xtream) {
+          final login = withLogin(
+              '/$loginPlaceholder/', source.username ?? '', password);
+          final args = [
+            Variable.withString(login),
+            Variable.withString('/$loginPlaceholder/'),
+          ];
+          for (final (table, column, where) in [
+            ('channels', 'stream_url', 'source_id = ?3'),
+            ('vod_items', 'stream_url', 'source_id = ?3'),
+            ('watch_progress', 'stream_url', 'source_id = ?3'),
+            ('stream_fallbacks', 'url', "channel_id LIKE ?3 || ':%'"),
+          ]) {
+            await customUpdate(
+              'UPDATE $table SET $column = REPLACE($column, ?1, ?2) '
+              'WHERE $where',
+              variables: [...args, Variable.withInt(source.id)],
+              updates: {
+                channels, vodItems, watchProgress, streamFallbacks,
+              },
+            );
+          }
+        }
+        await updateSource(
+            source.id, const SourcesCompanion(password: Value(null)));
+      });
+
   Future<void> markSynced(int id) =>
       (update(sources)..where((s) => s.id.equals(id))).write(
         SourcesCompanion(lastSyncedAt: Value(DateTime.now())),
@@ -437,7 +494,7 @@ class AppDatabase extends _$AppDatabase {
     final query = select(channels);
     if (search.isNotEmpty) {
       query
-        ..where((c) => c.name.contains(search) & _shown(c.categoryId))
+        ..where((c) => _containsText(c.name, search) & _shown(c.categoryId))
         ..limit(_searchLimit);
     } else {
       query.where((c) => c.categoryId.equalsNullable(categoryId));
@@ -464,7 +521,7 @@ class AppDatabase extends _$AppDatabase {
     final query = select(vodItems);
     if (search.isNotEmpty) {
       query
-        ..where((v) => v.title.contains(search) & _shown(v.categoryId))
+        ..where((v) => _containsText(v.title, search) & _shown(v.categoryId))
         ..limit(_searchLimit);
     } else {
       query.where((v) => v.categoryId.equalsNullable(categoryId));
@@ -491,7 +548,7 @@ class AppDatabase extends _$AppDatabase {
     final query = select(seriesItems);
     if (search.isNotEmpty) {
       query
-        ..where((s) => s.title.contains(search) & _shown(s.categoryId))
+        ..where((s) => _containsText(s.title, search) & _shown(s.categoryId))
         ..limit(_searchLimit);
     } else {
       query.where((s) => s.categoryId.equalsNullable(categoryId));

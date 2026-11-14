@@ -15,8 +15,6 @@ XtreamCatalogJob job({
     XtreamCatalogJob(
       sourceId: 3,
       baseUrl: 'http://x.test:8080',
-      username: 'us er',
-      password: 'p/w',
       liveCategories: liveCategories,
       vodCategories: '[]',
       seriesCategories: '[]',
@@ -34,7 +32,7 @@ void main() {
         'http://x.test');
   });
 
-  test('maps live streams into the shared entity, encoding credentials', () {
+  test('maps live streams into the shared entity, without the login', () {
     final data = parseXtreamCatalog(job(
       liveCategories: '[{"category_id":"5","category_name":"News"}]',
       live: '[{"stream_id":42,"name":"CNN","stream_icon":"http://l/c.png",'
@@ -42,10 +40,23 @@ void main() {
     ));
     final c = data.channels.single;
     expect(c.id, '3:42');
-    expect(c.streamUrl, 'http://x.test:8080/live/us%20er/p%2Fw/42.ts');
+    expect(c.streamUrl, 'http://x.test:8080/live/{user}/{pass}/42.ts');
+    expect(withLogin(c.streamUrl, 'us er', 'p/w'),
+        'http://x.test:8080/live/us%20er/p%2Fw/42.ts');
+    expect(withLogin('http://m3u.test/a.ts', 'u', 'p'), 'http://m3u.test/a.ts');
     expect(c.tvgId, 'cnn.us');
     expect(c.backendType, BackendType.xtream);
     expect(c.categoryId, data.categories.single.id);
+  });
+
+  test('panels that only allow HLS get .m3u8 live links', () {
+    final data = parseXtreamCatalog(XtreamCatalogJob(
+      sourceId: 3,
+      baseUrl: 'http://x.test',
+      liveExt: 'm3u8',
+      live: '[{"stream_id":42,"name":"CNN"}]',
+    ));
+    expect(data.channels.single.streamUrl, endsWith('/42.m3u8'));
   });
 
   test('tolerates the types real panels send', () {
@@ -139,12 +150,12 @@ void main() {
       '{"episodes":{"1":[$episode]}}',
       '{"episodes":[[$episode]]}',
     ]) {
-      final e = parseEpisodes(body, series, 'http://x.test', 'u', 'p').single;
+      final e = parseEpisodes(body, series, 'http://x.test').single;
       expect(e.item.title, endsWith(' · S1E2  Two'));
-      expect(e.item.streamUrl, 'http://x.test/series/u/p/77.mp4');
+      expect(e.item.streamUrl, 'http://x.test/series/{user}/{pass}/77.mp4');
       expect((e.season, e.number, e.name), (1, 2, 'Two'));
     }
-    expect(parseEpisodes('{"episodes":[]}', series, 'b', 'u', 'p'), isEmpty);
+    expect(parseEpisodes('{"episodes":[]}', series, 'b'), isEmpty);
   });
 
   test('error messages never contain the credentials in the URL', () {

@@ -32,7 +32,9 @@ class PlaylistData {
 /// The one seam between remote formats and the rest of the app.
 abstract interface class PlaylistBackend {
   /// Returns null when the remote playlist is unchanged since the last sync.
-  Future<PlaylistData?> fetch(Source source);
+  /// A backend that has the live channels first may hand them to [onLive].
+  Future<PlaylistData?> fetch(Source source,
+      {Future<void> Function(PlaylistData live)? onLive});
 
   /// Programmes for the tvg-ids in [wanted], which maps each one to a channel
   /// id carrying it. Empty when the source has no guide.

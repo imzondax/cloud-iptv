@@ -197,6 +197,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     fullscreen: _fullscreen,
                     onStep: _step,
                     onVolume: (v) => _setVolume(value.player, v),
+                    onMute: () => _toggleMute(value.player),
                     extras: [
                       _PictureButton(
                         value: _picture,
@@ -435,6 +436,7 @@ class _BottomBar extends StatelessWidget {
     required this.fullscreen,
     required this.onStep,
     required this.onVolume,
+    required this.onMute,
     required this.extras,
     required this.onDrawer,
     required this.onFullscreen,
@@ -447,6 +449,7 @@ class _BottomBar extends StatelessWidget {
   final bool fullscreen;
   final ValueChanged<int> onStep;
   final ValueChanged<double> onVolume;
+  final VoidCallback onMute;
   final List<Widget> extras;
   final VoidCallback onDrawer;
   final VoidCallback onFullscreen;
@@ -533,7 +536,7 @@ class _BottomBar extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _Volume(player: mpv, onChanged: onVolume),
+                  _Volume(player: mpv, onChanged: onVolume, onMute: onMute),
                   _TracksButton(player: mpv),
                   ...extras,
                   if (canStep)
@@ -643,10 +646,12 @@ class _SeekBarState extends State<_SeekBar> {
 }
 
 class _Volume extends StatelessWidget {
-  const _Volume({required this.player, required this.onChanged});
+  const _Volume(
+      {required this.player, required this.onChanged, required this.onMute});
 
   final Player player;
   final ValueChanged<double> onChanged;
+  final VoidCallback onMute;
 
   @override
   Widget build(BuildContext context) {
@@ -658,8 +663,12 @@ class _Volume extends StatelessWidget {
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(volume == 0 ? Icons.volume_off : Icons.volume_up,
-                size: 20, color: Colors.white),
+            IconButton(
+              tooltip: volume == 0 ? 'Unmute' : 'Mute',
+              onPressed: onMute,
+              icon: Icon(volume == 0 ? Icons.volume_off : Icons.volume_up,
+                  size: 20, color: Colors.white),
+            ),
             SizedBox(
               width: 120,
               child: Slider(

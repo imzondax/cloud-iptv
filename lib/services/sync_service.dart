@@ -11,16 +11,31 @@ class SyncService {
   final Map<BackendType, PlaylistBackend> _backends;
 
   /// Returns a user-safe error message, or null on success. The cached catalog
-  /// is only replaced by a successful, non-empty result.
-  Future<String?> sync(Source source) async {
+  /// is only replaced by a successful, non-empty result. [onStep] hears what
+  /// it is doing, for the progress line.
+  Future<String?> sync(Source source,
+      {void Function(String step)? onStep}) async {
     final backend = _backends[source.type]!;
     try {
-      final data = await backend.fetch(source);
+      onStep?.call('downloading the playlist');
+      final data = await backend.fetch(
+        source,
+        // Later syncs show the old catalog meanwhile, so only a first gains.
+        onLive: source.lastSyncedAt != null
+            ? null
+            : (live) async {
+                onStep?.call('saving ${live.channels.length} live channels');
+                await _db.addLiveChannels(source, live);
+                onStep?.call('downloading movies and series');
+              },
+      );
       if (data != null) {
         // Expired accounts and error pages often arrive as a valid empty list.
         if (data.isEmpty) {
           throw const PlaylistException('The playlist contains no streams');
         }
+        onStep?.call('saving ${data.channels.length} channels, '
+            '${data.vod.length} movies and ${data.series.length} series');
         await _db.replaceCatalog(source, data);
       }
     } catch (e) {
@@ -32,6 +47,7 @@ class SyncService {
       final current = await _db.source(source.id);
       final wanted = await _db.epgChannels(source.id);
       if (wanted.isNotEmpty) {
+        onStep?.call('updating the TV guide');
         await _db.saveEpg(await backend.fetchEpg(current, wanted));
       }
       await _db.pruneEpg(DateTime.now().subtract(const Duration(days: 1)));

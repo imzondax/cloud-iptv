@@ -583,6 +583,7 @@ class _SourceCard extends ConsumerWidget {
     );
     if (confirmed ?? false) {
       await ref.read(databaseProvider).deleteSource(source.id);
+      await ref.read(secretsProvider).savePassword(source.id, null);
     }
   }
 
@@ -701,10 +702,25 @@ class _SourceDialogState extends ConsumerState<_SourceDialog> {
   late final _name = TextEditingController(text: widget.source?.name);
   late final _url = TextEditingController(text: widget.source?.url);
   late final _username = TextEditingController(text: widget.source?.username);
-  late final _password = TextEditingController(text: widget.source?.password);
+  final _password = TextEditingController();
   late final _epg = TextEditingController(text: widget.source?.epgUrl);
   late BackendType _type = widget.source?.type ?? BackendType.m3u;
   bool _showPassword = false;
+
+  /// What the keychain held when the dialog opened.
+  String? _savedPassword;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.source case final source?) {
+      ref.read(secretsProvider).password(source).then((password) {
+        _savedPassword = password;
+        // Unless the user started typing first.
+        if (mounted && _password.text.isEmpty) _password.text = password ?? '';
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -736,31 +752,40 @@ class _SourceDialogState extends ConsumerState<_SourceDialog> {
     final epg = xtream || epgText.isEmpty ? null : epgText;
 
     final db = ref.read(databaseProvider);
+    final secrets = ref.read(secretsProvider);
     final existing = widget.source;
     var needsSync = true;
+    // Only where the keychain is unavailable does a password stay in the
+    // database, until a later start can move it.
+    Future<Value<String?>> keep(int id) async =>
+        Value(await secrets.savePassword(id, password) ? null : password);
     if (existing == null) {
-      await db.addSource(SourcesCompanion.insert(
+      final id = await db.addSource(SourcesCompanion.insert(
         type: _type,
         name: name,
         url: url,
         username: Value(username),
-        password: Value(password),
         epgUrl: Value(epg),
       ));
+      if (password != null) {
+        await db.updateSource(id, SourcesCompanion(password: await keep(id)));
+      }
     } else {
+      final newPassword = password != _savedPassword;
       needsSync = url != existing.url ||
           username != existing.username ||
-          password != existing.password ||
+          newPassword ||
           epg != existing.epgUrl;
-      // Stream URLs embed the credentials, and an old ETag means nothing to a
-      // new server, so a connection change must force a full refresh.
+      // An old ETag means nothing to a new server, so a connection change
+      // must force a full refresh.
       await db.updateSource(
         existing.id,
         SourcesCompanion(
           name: Value(name),
           url: Value(url),
           username: Value(username),
-          password: Value(password),
+          password:
+              newPassword ? await keep(existing.id) : const Value.absent(),
           epgUrl: Value(epg),
           etag: needsSync ? const Value(null) : const Value.absent(),
           lastSyncedAt: needsSync ? const Value(null) : const Value.absent(),

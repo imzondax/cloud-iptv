@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/models.dart';
 import '../providers/providers.dart';
+import '../services/secrets.dart';
 import '../services/updates.dart';
 import 'dashboard_tab.dart';
 import 'guide_tab.dart';
@@ -40,9 +41,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void initState() {
     super.initState();
     // Startup reads only the cache. The network waits for the first frame.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(syncProvider.notifier).syncAll(onlyStale: true);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       _offerUpdate();
+      try {
+        // Older versions kept logins in the database.
+        await moveLoginsToKeychain(
+            ref.read(databaseProvider), ref.read(secretsProvider));
+      } catch (_) {
+        // They stay where they were, and still work; next start tries again.
+      }
+      if (mounted) ref.read(syncProvider.notifier).syncAll(onlyStale: true);
     });
     ref.read(databaseProvider).setting(_savedTab).then((saved) {
       final tab = int.tryParse(saved ?? '');
@@ -107,6 +115,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       }
     });
     final syncing = ref.watch(syncProvider.select((s) => s.running));
+    final step = ref.watch(syncProvider.select((s) => s.step));
 
     final content = Column(
       children: [
@@ -114,6 +123,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           height: 2,
           child: syncing ? const LinearProgressIndicator(minHeight: 2) : null,
         ),
+        if (syncing)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+            child: Text(
+              'Syncing ${step ?? 'sources'}…',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12, color: OnAir.muted),
+            ),
+          ),
         Expanded(
           child: IndexedStack(
             index: _tab,

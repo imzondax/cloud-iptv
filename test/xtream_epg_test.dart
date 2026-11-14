@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cloud_iptv/models/models.dart';
+import 'package:cloud_iptv/services/playlist_backend.dart';
 import 'package:cloud_iptv/services/xtream_client.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -95,6 +96,37 @@ void main() {
   test('reports an error only when every channel fails', () async {
     final (b, _) = backend((_) => respond('', 404));
     await expectLater(b.fetchEpg(source, wanted), throwsA(isA<DioException>()));
+  });
+
+  ResponseBody panel(RequestOptions o, {String formats = '["m3u8"]'}) =>
+      respond(switch (o.queryParameters['action']) {
+        null => '{"user_info":{"auth":1,"allowed_output_formats":$formats}}',
+        'get_live_streams' => '[{"stream_id":42,"name":"CNN"}]',
+        'get_vod_streams' => '[{"stream_id":7,"name":"Heat"}]',
+        _ => '[]',
+      });
+
+  test('a catalog sync keeps to the allowed formats and hands live on first',
+      () async {
+    final (b, _) = backend(panel);
+    PlaylistData? early;
+    final data = await b.fetch(source, onLive: (live) async => early = live);
+    expect(early!.channels.single.streamUrl,
+        'http://x.test/live/{user}/{pass}/42.m3u8');
+    expect(early!.vod, isEmpty);
+    expect(data!.channels, hasLength(1));
+    expect(data.vod.single.title, 'Heat');
+    expect(data.vod.single.streamUrl, 'http://x.test/movie/{user}/{pass}/7.mp4');
+
+    final (ts, _) = backend((o) => panel(o, formats: '["m3u8","ts"]'));
+    expect((await ts.fetch(source))!.channels.single.streamUrl, endsWith('.ts'));
+  });
+
+  test('a failed list fails the whole catalog sync', () async {
+    final (b, _) = backend((o) => o.queryParameters['action'] == 'get_series'
+        ? respond('', 500)
+        : panel(o));
+    await expectLater(b.fetch(source), throwsA(isA<DioException>()));
   });
 
   test('stops at the channel limit, 5 requests at a time at most', () async {

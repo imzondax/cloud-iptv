@@ -1,9 +1,12 @@
 import 'package:cloud_iptv/models/models.dart';
 import 'package:cloud_iptv/services/database.dart';
 import 'package:cloud_iptv/services/playlist_backend.dart';
+import 'package:cloud_iptv/services/secrets.dart';
 import 'package:cloud_iptv/services/sync_service.dart';
+import 'package:cloud_iptv/services/xtream_client.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class FakeBackend implements PlaylistBackend {
@@ -12,9 +15,18 @@ class FakeBackend implements PlaylistBackend {
   Object? epgError;
   List<EpgProgram> epg = const [];
 
+  /// Handed to `onLive` before [data] returns, then [midway] runs.
+  PlaylistData? live;
+  Future<void> Function()? midway;
+  bool offeredLive = false;
+
   @override
-  Future<PlaylistData?> fetch(Source source) async {
+  Future<PlaylistData?> fetch(Source source,
+      {Future<void> Function(PlaylistData live)? onLive}) async {
     if (error != null) throw error!;
+    offeredLive = onLive != null;
+    if (live case final live? when onLive != null) await onLive(live);
+    await midway?.call();
     return data;
   }
 
@@ -116,6 +128,49 @@ void main() {
     backend.data = null;
     expect(await service.sync(source), isNull);
     expect(await stored(), hasLength(1));
+  });
+
+  test('sync reports each step for the progress line', () async {
+    backend.data = catalog(source.id, [channel(source.id, 'a', tvgId: 'x')]);
+    final steps = <String>[];
+    await service.sync(source, onStep: steps.add);
+    expect(steps, [
+      'downloading the playlist',
+      'saving 1 channels, 0 movies and 0 series',
+      'updating the TV guide',
+    ]);
+  });
+
+  test('search ignores the case of letters like Ø, and takes % and _ as typed',
+      () async {
+    backend.data = catalog(source.id, [
+      for (final name in ['Østfold TV', 'BLÅBÆR', '100% Hits', 'A_B', 'AxB'])
+        channel(source.id, name),
+    ]);
+    await service.sync(source);
+    Future<List<String>> search(String text) async =>
+        (await db.watchChannels(null, text).first).map((c) => c.name).toList();
+
+    expect(await search('østfold'), ['Østfold TV']);
+    expect(await search('blå'), ['BLÅBÆR']);
+    expect(await search('0%'), ['100% Hits']);
+    expect(await search('a_b'), ['A_B']);
+  });
+
+  test('a first sync saves live channels before the rest arrives', () async {
+    backend
+      ..live = catalog(source.id, [channel(source.id, 'a')])
+      ..data = catalog(
+          source.id, [channel(source.id, 'a'), channel(source.id, 'b')]);
+    int? midway;
+    backend.midway = () async => midway = (await stored()).length;
+    expect(await service.sync(source), isNull);
+    expect(midway, 1);
+    expect(await stored(), hasLength(2));
+
+    // Later syncs keep showing the old catalog, so they skip the early write.
+    await service.sync(await db.source(source.id));
+    expect(backend.offeredLive, isFalse);
   });
 
   test('a guide failure is reported but keeps the new channels', () async {
@@ -252,5 +307,77 @@ void main() {
         isFalse);
     expect(service.isStale(at(now.subtract(const Duration(hours: 7))), now),
         isTrue);
+  });
+  test('the player gets stored Xtream URLs with the login filled in',
+      () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final id = await db.addSource(SourcesCompanion.insert(
+        type: BackendType.xtream,
+        name: 'X',
+        url: 'http://x.test',
+        username: const Value('us er')));
+    await const Secrets().savePassword(id, 'p/w');
+
+    expect(
+        await playableUrls(db, const Secrets(), id, [
+          'http://x.test/live/{user}/{pass}/1.m3u8',
+          'http://x.test/movie/{user}/{pass}/2.mp4',
+        ]),
+        [
+          'http://x.test/live/us%20er/p%2Fw/1.m3u8',
+          'http://x.test/movie/us%20er/p%2Fw/2.mp4',
+        ]);
+    // M3U links carry no placeholder, and need no source lookup.
+    expect(await playableUrls(db, const Secrets(), 999, ['http://m/a.ts']),
+        ['http://m/a.ts']);
+  });
+
+  test('a start moves an old saved login into the keychain', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final id = await db.addSource(SourcesCompanion.insert(
+        type: BackendType.xtream,
+        name: 'X',
+        url: 'http://x.test',
+        username: const Value('us er'),
+        password: const Value('p/w')));
+    final xtream = await db.source(id);
+    PlaylistChannel live(String streamId) => PlaylistChannel(
+          id: '$id:$streamId',
+          sourceId: id,
+          name: streamId,
+          streamUrl: 'http://x.test/live/us%20er/p%2Fw/$streamId.ts',
+          categoryId: '$id:live:g',
+          tvgId: 'same',
+          backendType: BackendType.xtream,
+          sortOrder: 0,
+        );
+    await db.replaceCatalog(xtream, catalog(id, [live('1'), live('2')]));
+    await db.saveProgress(
+        VodItem(
+            id: '$id:ep:9',
+            sourceId: id,
+            title: 'Episode',
+            streamUrl: 'http://x.test/series/us%20er/p%2Fw/9.mp4',
+            categoryId: 'c',
+            sortOrder: 0),
+        const Duration(minutes: 5),
+        const Duration(minutes: 40));
+
+    await moveLoginsToKeychain(db, const Secrets());
+    await moveLoginsToKeychain(db, const Secrets()); // Nothing left to move.
+
+    final moved = await db.source(id);
+    expect(moved.password, isNull);
+    expect(await const Secrets().password(moved), 'p/w');
+    final urls = [
+      ...(await db.watchChannels('$id:live:g', '').first).map((c) => c.streamUrl),
+      ...await db.fallbackUrls('$id:1'),
+      (await db.watchKeepWatching(5).first).single.streamUrl,
+    ];
+    expect(urls, hasLength(4));
+    for (final url in urls) {
+      expect(url, contains('/{user}/{pass}/'));
+      expect(withLogin(url, 'us er', 'p/w'), contains('/us%20er/p%2Fw/'));
+    }
   });
 }

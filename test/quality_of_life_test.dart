@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cloud_iptv/models/models.dart';
@@ -8,8 +10,10 @@ import 'package:cloud_iptv/services/tmdb.dart';
 import 'package:cloud_iptv/services/updates.dart';
 import 'package:cloud_iptv/services/xtream_client.dart';
 import 'package:cloud_iptv/ui/library_tab.dart';
+import 'package:dio/dio.dart';
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _channel = PlaylistChannel(
@@ -56,6 +60,30 @@ Future<void> _catalog(AppDatabase db, int id) async {
       series: const [],
     ),
   );
+}
+
+/// TMDB that finds every title, except the ones in [failing], which error.
+class _TmdbAdapter implements HttpClientAdapter {
+  final failing = <String>{};
+  final asked = <String>[];
+
+  @override
+  Future<ResponseBody> fetch(RequestOptions options,
+      Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
+    final query = options.queryParameters['query'] as String?;
+    asked.add(query ?? options.path);
+    if (failing.contains(query)) return ResponseBody.fromString('{}', 500);
+    return ResponseBody.fromString(
+      jsonEncode(query != null
+          ? {'results': [{'id': 1}]}
+          : {'original_language': 'en'}),
+      200,
+      headers: {Headers.contentTypeHeader: [Headers.jsonContentType]},
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
 }
 
 void main() {
@@ -407,5 +435,84 @@ void main() {
     expect(languageOf('Up - The Movie', '4K Movies'), isNull);
     expect(namesIn(' Drama, Crime / Action|'), ['Drama', 'Crime', 'Action']);
     expect(namesIn(null), isEmpty);
+  });
+
+  test('TMDB lookups save what they find and retry only the failures',
+      () async {
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    final id = await _source(db);
+    await db.replaceCatalog(
+      await db.source(id),
+      PlaylistData(
+        categories: [
+          Category(id: 'a', sourceId: id, name: 'A', kind: CategoryKind.vod),
+        ],
+        channels: const [],
+        vod: [
+          for (var n = 1; n <= 20; n++)
+            VodItem(
+              id: '$id:$n',
+              sourceId: id,
+              title: 'Movie $n',
+              streamUrl: 'http://x.test/$n.mp4',
+              categoryId: 'a',
+              sortOrder: n,
+            ),
+        ],
+        series: const [],
+      ),
+    );
+    final tmdb = _TmdbAdapter()..failing.add('Movie 7');
+    final dio = Dio()..httpClientAdapter = tmdb;
+
+    Future<void> lookUp() async {
+      final container = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        dioProvider.overrideWithValue(dio),
+      ]);
+      addTearDown(container.dispose);
+      await container.read(tmdbKeyProvider.notifier).set('k');
+      final finished = Completer<void>();
+      container.listen(detailsLookupProvider, (_, next) {
+        if (finished.isCompleted) return;
+        if (next case AsyncError(:final error)) finished.completeError(error);
+        if (next.value case (:final done, :final total) when done == total) {
+          finished.complete();
+        }
+      }, fireImmediately: true);
+      await finished.future;
+    }
+
+    await lookUp();
+    expect((await db.watchTitleDetails().first).length, 19);
+
+    tmdb
+      ..failing.clear()
+      ..asked.clear();
+    await lookUp();
+    expect(tmdb.asked.first, 'Movie 7');
+    expect(tmdb.asked, hasLength(2));
+    expect((await db.watchTitleDetails().first).values.map((d) => d.language),
+        everyElement('en'));
+    expect((await db.watchTitleDetails().first).length, 20);
+  });
+
+  test('a language tag and TMDB code for one language match', () {
+    String? language(String title, [TitleDetail? detail]) {
+      final row = VodItem(
+          id: '1', sourceId: 1, title: title, streamUrl: '', categoryId: 'a',
+          sortOrder: 0);
+      final details = {
+        titleKey(tv: false, title: title): ?detail,
+      };
+      return factsOf(row, const {}, details).tags['Language']!.firstOrNull;
+    }
+
+    expect(language('SE - Jakten'), 'sv');
+    expect(language('ENG - Heat'), 'en');
+    expect(language('NO - Kon-Tiki'), 'no');
+    expect(language('X', TitleDetail(key: 'k', language: 'nb')), 'no');
+    expect(language('X', TitleDetail(key: 'k', language: 'uk')), 'uk');
   });
 }

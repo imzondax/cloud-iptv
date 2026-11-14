@@ -2,19 +2,22 @@ import 'package:cloud_iptv/models/models.dart';
 import 'package:cloud_iptv/providers/providers.dart';
 import 'package:cloud_iptv/services/database.dart';
 import 'package:cloud_iptv/services/playlist_backend.dart';
+import 'package:cloud_iptv/services/secrets.dart';
 import 'package:cloud_iptv/services/sync_service.dart';
 import 'package:cloud_iptv/ui/sources_tab.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class RecordingBackend implements PlaylistBackend {
   final fetched = <Source>[];
 
   @override
-  Future<PlaylistData?> fetch(Source source) async {
+  Future<PlaylistData?> fetch(Source source,
+      {Future<void> Function(PlaylistData live)? onLive}) async {
     fetched.add(source);
     return null;
   }
@@ -68,6 +71,7 @@ void main() {
   }
 
   Future<void> addSource(WidgetTester tester, BackendType type) async {
+    FlutterSecureStorage.setMockInitialValues({});
     await tester.runAsync(() async {
       db = AppDatabase(NativeDatabase.memory());
       backend = RecordingBackend();
@@ -116,7 +120,12 @@ void main() {
         find.widgetWithText(TextFormField, 'pass'), 'new pass');
     await save(tester);
 
-    expect(backend.fetched.single.password, 'new pass');
+    // In the keychain, not the database.
+    expect(backend.fetched.single.password, isNull);
+    expect(
+        await tester.runAsync(
+            () => const Secrets().password(backend.fetched.single)),
+        'new pass');
     expect(backend.fetched.single.etag, isNull);
     await finish(tester);
   });

@@ -12,6 +12,7 @@ import '../player/iptv_player.dart';
 import '../services/database.dart';
 import '../services/m3u_parser.dart';
 import '../services/playlist_backend.dart';
+import '../services/secrets.dart';
 import '../services/sync_service.dart';
 import '../services/tmdb.dart';
 import '../services/updates.dart';
@@ -28,8 +29,11 @@ final dioProvider = Provider<Dio>((ref) => Dio(BaseOptions(
       receiveTimeout: const Duration(minutes: 2),
     )));
 
-final xtreamBackendProvider =
-    Provider((ref) => XtreamBackend(ref.watch(dioProvider)));
+final secretsProvider = Provider((ref) => const Secrets());
+
+final xtreamBackendProvider = Provider((ref) => XtreamBackend(
+    ref.watch(dioProvider),
+    password: ref.watch(secretsProvider).password));
 
 final syncServiceProvider = Provider((ref) => SyncService(
       ref.watch(databaseProvider),
@@ -42,32 +46,49 @@ final syncServiceProvider = Provider((ref) => SyncService(
 // Playlist state
 
 /// [issues] holds the last problem per source id, until its next sync.
-typedef SyncState = ({bool running, String? error, Map<int, String> issues});
+/// [step] says what a running sync is doing, such as `Home: saving`.
+typedef SyncState = ({
+  bool running,
+  String? step,
+  String? error,
+  Map<int, String> issues,
+});
 
 final syncProvider =
     NotifierProvider<SyncController, SyncState>(SyncController.new);
 
 class SyncController extends Notifier<SyncState> {
   @override
-  SyncState build() => (running: false, error: null, issues: const {});
+  SyncState build() =>
+      (running: false, step: null, error: null, issues: const {});
 
   Future<void> syncAll({bool onlyStale = false}) async {
     if (state.running) return;
     final issues = {...state.issues};
-    state = (running: true, error: null, issues: issues);
+    state = (running: true, step: null, error: null, issues: issues);
     final service = ref.read(syncServiceProvider);
     final now = DateTime.now();
+    final sources = [
+      for (final s in await ref.read(databaseProvider).allSources())
+        if (!onlyStale || service.isStale(s, now)) s,
+    ];
     String? error;
-    for (final source in await ref.read(databaseProvider).allSources()) {
-      if (onlyStale && !service.isStale(source, now)) continue;
-      final issue = await service.sync(source);
+    for (final (i, source) in sources.indexed) {
+      final count = sources.length > 1 ? ' (${i + 1} of ${sources.length})' : '';
+      final issue = await service.sync(source,
+          onStep: (step) => state = (
+                running: true,
+                step: '${source.name}$count: $step',
+                error: null,
+                issues: issues,
+              ));
       if (issue == null) {
         issues.remove(source.id);
       } else {
         issues[source.id] = error = issue;
       }
     }
-    state = (running: false, error: error, issues: issues);
+    state = (running: false, step: null, error: error, issues: issues);
   }
 }
 
@@ -184,6 +205,8 @@ typedef LookupProgress = ({int done, int total});
 /// Fetches TMDB details for each title without them, a few at once, which
 /// stays under TMDB's rate limit. Saved details stay, so a restart resumes.
 final detailsLookupProvider = StreamProvider<LookupProgress>((ref) async* {
+  // Runs again when a sync ends, for the titles it brought.
+  if (ref.watch(syncProvider.select((s) => s.running))) return;
   final apiKey = await ref.watch(tmdbKeyProvider.future);
   if (apiKey == null || apiKey.isEmpty) return;
   final db = ref.read(databaseProvider);
@@ -510,12 +533,17 @@ class ActiveStream extends Notifier<NowPlaying?> {
     final db = ref.read(databaseProvider);
     _recent = Timer(
         _countsAsWatched, () => db.markChannelWatched(channel.id));
-    final fallbacks = await db.fallbackUrls(channel.id);
+    final urls = await _withLogin(channel.sourceId,
+        [channel.streamUrl, ...await db.fallbackUrls(channel.id)]);
     final player = await ref.read(playerProvider.future);
     await _applyLanguages(player);
     if (session != _session) return;
-    await player.open([channel.streamUrl, ...fallbacks], live: true);
+    await player.open(urls, live: true);
   }
+
+  Future<List<String>> _withLogin(int sourceId, List<String> urls) =>
+      playableUrls(ref.read(databaseProvider), ref.read(secretsProvider),
+          sourceId, urls);
 
   /// Flips back to the channel watched before this one.
   Future<void> lastChannel() async {
@@ -530,10 +558,11 @@ class ActiveStream extends Notifier<NowPlaying?> {
     final session = ++_session;
     state = NowPlaying(program.title);
     _stopTracking();
+    final urls = await _withLogin(channel.sourceId, [url]);
     final player = await ref.read(playerProvider.future);
     await _applyLanguages(player);
     if (session != _session) return;
-    await player.open([url], live: false);
+    await player.open(urls, live: false);
   }
 
   Future<void> step(int delta) async {
@@ -553,9 +582,10 @@ class ActiveStream extends Notifier<NowPlaying?> {
     if (session != _session) return;
     _stopTracking();
     final start = await ref.read(databaseProvider).progress(item.id);
+    final urls = await _withLogin(item.sourceId, [item.streamUrl]);
     await _applyLanguages(player);
     if (session != _session) return;
-    await player.open([item.streamUrl], live: false, start: start);
+    await player.open(urls, live: false, start: start);
     if (session != _session) return;
     _vod = item;
     _saver = Timer.periodic(_saveEvery, (_) => _saveProgress(player));

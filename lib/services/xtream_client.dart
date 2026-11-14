@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show compute;
@@ -24,34 +25,37 @@ class XtreamClient {
       .replaceFirst(RegExp(r'/player_api\.php.*$'), '')
       .replaceFirst(RegExp(r'/+$'), '');
 
-  Future<String> _get(String? action, [Map<String, Object?> extra = const {}]) async {
-    final response = await _dio.get<String>(
-      '$baseUrl/player_api.php',
-      queryParameters: {
+  Map<String, Object?> _query(String? action, Map<String, Object?> extra) => {
         'username': username,
         'password': password,
         'action': ?action,
         ...extra,
-      },
+      };
+
+  Future<String> _get(String? action, [Map<String, Object?> extra = const {}]) async {
+    final response = await _dio.get<String>(
+      '$baseUrl/player_api.php',
+      queryParameters: _query(action, extra),
       options: Options(responseType: ResponseType.plain),
     );
     return response.data ?? '';
   }
 
-  Future<void> authenticate() async {
+  /// Saves one list to [path], so a big catalog never sits in memory here.
+  Future<void> download(String action, String path, CancelToken cancel) =>
+      _dio.download('$baseUrl/player_api.php', path,
+          queryParameters: _query(action, const {}), cancelToken: cancel);
+
+  /// Checks the login, and returns the stream formats the panel allows.
+  Future<List<String>> authenticate() async {
     final body = jsonDecode(await _get(null));
     final info = body is Map ? body['user_info'] : null;
     if (info is! Map || info['auth']?.toString() != '1') {
       throw const PlaylistException('Wrong Xtream username or password');
     }
+    final formats = info['allowed_output_formats'];
+    return formats is List ? [for (final f in formats) '$f'] : const [];
   }
-
-  Future<String> liveCategories() => _get('get_live_categories');
-  Future<String> vodCategories() => _get('get_vod_categories');
-  Future<String> seriesCategories() => _get('get_series_categories');
-  Future<String> liveStreams() => _get('get_live_streams');
-  Future<String> vodStreams() => _get('get_vod_streams');
-  Future<String> seriesList() => _get('get_series');
 
   Future<String> seriesInfo(String seriesId) =>
       _get('get_series_info', {'series_id': seriesId});
@@ -67,39 +71,67 @@ class XtreamClient {
 }
 
 class XtreamBackend implements PlaylistBackend {
-  XtreamBackend(this._dio);
+  /// [password] looks a source's password up, in the keychain in the app.
+  XtreamBackend(this._dio, {Future<String?> Function(Source)? password})
+      : _password = password ?? ((s) async => s.password);
   final Dio _dio;
+  final Future<String?> Function(Source) _password;
 
-  XtreamClient _client(Source s) =>
-      XtreamClient(_dio, s.url, s.username ?? '', s.password ?? '');
+  Future<XtreamClient> _client(Source s) async => XtreamClient(
+      _dio, s.url, s.username ?? '', await _password(s) ?? '');
 
+  /// Live channels are parsed and handed to [onLive] as soon as they arrive,
+  /// as the movie and series lists are often far larger.
   @override
-  Future<PlaylistData?> fetch(Source source) async {
-    final client = _client(source);
-    await client.authenticate();
-    final bodies = await Future.wait([
-      client.liveCategories(),
-      client.vodCategories(),
-      client.seriesCategories(),
-      client.liveStreams(),
-      client.vodStreams(),
-      client.seriesList(),
-    ]);
-    return compute(
-      parseXtreamCatalog,
-      XtreamCatalogJob(
-        sourceId: source.id,
-        baseUrl: client.baseUrl,
-        username: client.username,
-        password: client.password,
-        liveCategories: bodies[0],
-        vodCategories: bodies[1],
-        seriesCategories: bodies[2],
-        live: bodies[3],
-        vod: bodies[4],
-        series: bodies[5],
-      ),
-    );
+  Future<PlaylistData?> fetch(Source source,
+      {Future<void> Function(PlaylistData live)? onLive}) async {
+    final client = await _client(source);
+    final formats = await client.authenticate();
+    // Some panels refuse .ts and only serve HLS.
+    final liveExt = formats.isEmpty || formats.contains('ts') ? 'ts' : 'm3u8';
+    final dir = await Directory.systemTemp.createTemp('cloud_iptv_xtream');
+    final cancel = CancelToken();
+    Future<Map<String, String>> download(List<String> actions) async {
+      final files = {
+        for (final a in actions)
+          a: '${dir.path}${Platform.pathSeparator}$a.json',
+      };
+      await Future.wait([
+        for (final e in files.entries) client.download(e.key, e.value, cancel),
+      ]);
+      return files;
+    }
+
+    Future<PlaylistData> parse(Map<String, String> files) => compute(
+        parseXtreamFiles, (source.id, client.baseUrl, liveExt, files));
+
+    final rest = download(const [
+      'get_vod_categories',
+      'get_series_categories',
+      'get_vod_streams',
+      'get_series',
+    ])
+      ..ignore(); // Awaited below; this only keeps an early error from being unhandled.
+    try {
+      final live = await parse(
+          await download(const ['get_live_categories', 'get_live_streams']));
+      await onLive?.call(live);
+      final library = await parse(await rest);
+      return PlaylistData(
+        categories: [...live.categories, ...library.categories],
+        channels: live.channels,
+        vod: library.vod,
+        series: library.series,
+        fallbacks: live.fallbacks,
+      );
+    } catch (_) {
+      cancel.cancel();
+      rethrow;
+    } finally {
+      // Downloads still writing would keep the folder from being deleted.
+      await rest.then((_) {}, onError: (_) {});
+      await dir.delete(recursive: true);
+    }
   }
 
   /// Many panels disable xmltv.php (a 404, or an HTML page), so the per-channel
@@ -107,7 +139,7 @@ class XtreamBackend implements PlaylistBackend {
   @override
   Future<List<EpgProgram>> fetchEpg(
       Source source, Map<String, String> wanted) async {
-    final client = _client(source);
+    final client = await _client(source);
     try {
       final programs =
           await fetchXmltv(_dio, client.xmltvUrl, wanted.keys.toSet());
@@ -148,39 +180,71 @@ class XtreamBackend implements PlaylistBackend {
   /// JSON EPG chunk for one channel, for servers without a usable xmltv.php.
   Future<List<EpgProgram>> fetchShortEpg(
       Source source, PlaylistChannel channel) async {
-    final body = await _client(source).shortEpg(rawId(channel.id));
+    final body = await (await _client(source)).shortEpg(rawId(channel.id));
     return parseShortEpg(body, channel.epgKey);
   }
 
   Future<List<Episode>> fetchEpisodes(Source source, SeriesItem series) async {
-    final client = _client(source);
+    final client = await _client(source);
     final body = await client.seriesInfo(rawId(series.id));
-    return parseEpisodes(
-        body, series, client.baseUrl, client.username, client.password);
+    return parseEpisodes(body, series, client.baseUrl);
   }
 }
 
 /// Strips the `<sourceId>:` prefix from a stored id.
 String rawId(String id) => id.substring(id.indexOf(':') + 1);
 
+/// Stands in for the login inside stored Xtream stream URLs, so the database
+/// never holds it. [withLogin] fills it in at play time.
+const loginPlaceholder = '{user}/{pass}';
+
+/// [url] with the login in place of [loginPlaceholder]. Other URLs pass as is.
+String withLogin(String url, String username, String password) =>
+    url.replaceFirst('/$loginPlaceholder/',
+        '/${Uri.encodeComponent(username)}/${Uri.encodeComponent(password)}/');
+
 class XtreamCatalogJob {
   const XtreamCatalogJob({
     required this.sourceId,
     required this.baseUrl,
-    required this.username,
-    required this.password,
-    required this.liveCategories,
-    required this.vodCategories,
-    required this.seriesCategories,
-    required this.live,
-    required this.vod,
-    required this.series,
+    this.liveExt = 'ts',
+    this.liveCategories = '[]',
+    this.vodCategories = '[]',
+    this.seriesCategories = '[]',
+    this.live = '[]',
+    this.vod = '[]',
+    this.series = '[]',
   });
 
   final int sourceId;
-  final String baseUrl, username, password;
+  final String baseUrl;
+
+  /// `ts`, or `m3u8` on panels that only allow HLS.
+  final String liveExt;
   final String liveCategories, vodCategories, seriesCategories;
   final String live, vod, series;
+}
+
+/// Isolate entry point: reads the lists [XtreamBackend.fetch] saved, keyed by
+/// action. A list not given counts as empty.
+PlaylistData parseXtreamFiles((int, String, String, Map<String, String>) job) {
+  final (sourceId, baseUrl, liveExt, files) = job;
+  String read(String action) => switch (files[action]) {
+        final path? =>
+          utf8.decode(File(path).readAsBytesSync(), allowMalformed: true),
+        null => '[]',
+      };
+  return parseXtreamCatalog(XtreamCatalogJob(
+    sourceId: sourceId,
+    baseUrl: baseUrl,
+    liveExt: liveExt,
+    liveCategories: read('get_live_categories'),
+    vodCategories: read('get_vod_categories'),
+    seriesCategories: read('get_series_categories'),
+    live: read('get_live_streams'),
+    vod: read('get_vod_streams'),
+    series: read('get_series'),
+  ));
 }
 
 /// Isolate entry point. Xtream panels disagree on types (ids as int or string,
@@ -222,9 +286,6 @@ PlaylistData parseXtreamCatalog(XtreamCatalogJob job) {
   addCategories(job.vodCategories, CategoryKind.vod);
   addCategories(job.seriesCategories, CategoryKind.series);
 
-  final user = Uri.encodeComponent(job.username);
-  final pass = Uri.encodeComponent(job.password);
-
   final channels = <PlaylistChannel>[];
   for (final s in _list(job.live)) {
     final id = _str(s['stream_id']);
@@ -235,7 +296,7 @@ PlaylistData parseXtreamCatalog(XtreamCatalogJob job) {
         sourceId: src,
         name: _str(s['name']) ?? 'Unnamed',
         logoUrl: _str(s['stream_icon']),
-        streamUrl: '${job.baseUrl}/live/$user/$pass/$id.ts',
+        streamUrl: '${job.baseUrl}/live/$loginPlaceholder/$id.${job.liveExt}',
         categoryId: categoryId,
         tvgId: _str(s['epg_channel_id']),
         backendType: BackendType.xtream,
@@ -258,7 +319,7 @@ PlaylistData parseXtreamCatalog(XtreamCatalogJob job) {
         sourceId: src,
         title: _str(s['name']) ?? 'Unnamed',
         posterUrl: _str(s['stream_icon']),
-        streamUrl: '${job.baseUrl}/movie/$user/$pass/$id.$ext',
+        streamUrl: '${job.baseUrl}/movie/$loginPlaceholder/$id.$ext',
         categoryId: categoryId,
         year: _year(_str(s['year']) ??
                 _str(s['releaseDate']) ??
@@ -357,8 +418,7 @@ String? catchUpUrl(PlaylistChannel channel, EpgProgram program) {
   return '${live[1]}/timeshift/${live[2]}/${live[3]}/$minutes/$start/${live[4]}.ts';
 }
 
-List<Episode> parseEpisodes(String body, SeriesItem series, String baseUrl,
-    String username, String password) {
+List<Episode> parseEpisodes(String body, SeriesItem series, String baseUrl) {
   final json = jsonDecode(body);
   final episodes = json is Map ? json['episodes'] : null;
   // A map keyed by season number, or a list of seasons on some panels.
@@ -367,8 +427,6 @@ List<Episode> parseEpisodes(String body, SeriesItem series, String baseUrl,
     List l => l,
     _ => const [],
   };
-  final user = Uri.encodeComponent(username);
-  final pass = Uri.encodeComponent(password);
   final out = <Episode>[];
   for (final season in seasons.whereType<List>()) {
     for (final e in season.whereType<Map>()) {
@@ -390,7 +448,7 @@ List<Episode> parseEpisodes(String body, SeriesItem series, String baseUrl,
           title:
               '${series.title} · ${title == null ? label : '$label  $title'}',
           posterUrl: series.posterUrl,
-          streamUrl: '$baseUrl/series/$user/$pass/$id.$ext',
+          streamUrl: '$baseUrl/series/$loginPlaceholder/$id.$ext',
           categoryId: series.categoryId,
           sortOrder: out.length,
         ),

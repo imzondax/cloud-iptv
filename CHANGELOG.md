@@ -1,5 +1,14 @@
 # Changelog
 
+## Build 5 (1.0.4) - 2026-11-14
+
+- Mute the stream by clicking the speaker icon in the player.
+- Syncing shows which source and step it is on.
+- Xtream: works with panels that only allow HLS, uses less memory while syncing, and shows live channels first on a first sync.
+- Source passwords are kept in the system keychain, not the database.
+- Search finds letters like Æ, Ø and Å whatever their case.
+- Fixed: TMDB filters missed titles added after the app started, and the Language list showed some languages twice.
+
 ## Build 4 (1.0.3) - 2026-11-08
 
 - More filters: language, studio and age limit from TMDB, and release year for movies.

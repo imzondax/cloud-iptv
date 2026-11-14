@@ -39,6 +39,27 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
   bool _panelClosed = false;
   LibraryFilters _filters = const LibraryFilters();
 
+  /// The last filter run and its inputs. Filtering builds a TMDB key per row,
+  /// so it reruns only when one of them changes, not on every rebuild.
+  (Object, LibraryFilters, Object, Object, List<Object>)? _filtered;
+
+  List<Object> _filter(List<Object> rows, List<Category> categories,
+      Map<String, TitleDetail> details) {
+    if (_filtered case (final r, final f, final c, final d, final shown)
+        when identical(r, rows) &&
+            identical(f, _filters) &&
+            identical(c, categories) &&
+            identical(d, details)) {
+      return shown;
+    }
+    final names = {for (final c in categories) c.id: c.name};
+    final shown = rows
+        .where((r) => _filters.matches(factsOf(r, names, details)))
+        .toList();
+    _filtered = (rows, _filters, categories, details, shown);
+    return shown;
+  }
+
   bool get _isSeries => widget.kind == CategoryKind.series;
   String get _savedCategory => 'category_${widget.kind.name}';
 
@@ -64,12 +85,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
     final details = ref.watch(titleDetailsProvider).value ?? const {};
     final categoryNames = {for (final c in categories) c.id: c.name};
     final all = rows.value ?? const [];
-    final shown = _filters.isEmpty
-        ? all
-        : all
-            .where((r) =>
-                _filters.matches(factsOf(r, categoryNames, details)))
-            .toList();
+    final shown = _filters.isEmpty ? all : _filter(all, categories, details);
     void toggle(String id) => ref
         .read(databaseProvider)
         .setFavoriteTitle(id, kind, !favorites.contains(id));
@@ -241,7 +257,7 @@ Iterable<String> namesIn(String? list) => (list ?? '')
 
 /// Names for the original languages TMDB reports most. Others show as codes.
 const _languageNames = {
-  'en': 'English', 'no': 'Norwegian', 'nb': 'Norwegian', 'sv': 'Swedish',
+  'en': 'English', 'no': 'Norwegian', 'sv': 'Swedish',
   'da': 'Danish', 'fi': 'Finnish', 'de': 'German', 'fr': 'French',
   'es': 'Spanish', 'it': 'Italian', 'pt': 'Portuguese', 'nl': 'Dutch',
   'pl': 'Polish', 'ru': 'Russian', 'tr': 'Turkish', 'ar': 'Arabic',
@@ -250,10 +266,25 @@ const _languageNames = {
   'is': 'Icelandic', 'el': 'Greek', 'he': 'Hebrew', 'fa': 'Persian',
 };
 
+/// Provider tags are often country or three-letter codes, so `SE` and TMDB's
+/// `sv` would show as two languages. Only for tags: TMDB's `uk` is Ukrainian.
+const _languageAliases = {
+  'nor': 'no', 'se': 'sv', 'swe': 'sv', 'dk': 'da',
+  'dan': 'da', 'fin': 'fi', 'eng': 'en', 'uk': 'en', 'gb': 'en', 'us': 'en',
+  'ger': 'de', 'deu': 'de', 'fra': 'fr', 'fre': 'fr', 'spa': 'es',
+  'ita': 'it', 'por': 'pt', 'br': 'pt', 'nld': 'nl', 'dut': 'nl', 'pol': 'pl',
+  'rus': 'ru', 'tur': 'tr', 'ara': 'ar', 'hin': 'hi', 'jp': 'ja', 'jpn': 'ja',
+  'kr': 'ko', 'kor': 'ko', 'chi': 'zh', 'zho': 'zh', 'gr': 'el', 'gre': 'el',
+  'ell': 'el', 'ua': 'uk', 'cz': 'cs', 'ir': 'fa', 'per': 'fa', 'il': 'he',
+};
+
 String languageName(String code) => _languageNames[code] ?? code.toUpperCase();
 
 /// The dropdown filters, each matching any of a title's values.
 const _facets = ['Language', 'Genre', 'Director', 'Studio'];
+
+String Function(String) _nameFor(String facet) =>
+    facet == 'Language' ? languageName : (s) => s;
 
 typedef TitleFacts = ({
   Map<String, Iterable<String>> tags,
@@ -272,8 +303,12 @@ TitleFacts factsOf(Object row, Map<String, String> categoryNames,
   };
   final detail = details[titleKey(tv: tv, title: title, year: year)];
   final series = row is SeriesItem ? row : null;
-  final language = detail?.language ??
-      languageOf(title, categoryNames[categoryId])?.toLowerCase();
+  final guess = languageOf(title, categoryNames[categoryId])?.toLowerCase();
+  final language = switch (detail?.language) {
+    'nb' || 'nn' => 'no',
+    final String code => code,
+    null => _languageAliases[guess] ?? guess,
+  };
   return (
     tags: {
       'Language': [?language],
@@ -360,9 +395,15 @@ class _FiltersDialogState extends ConsumerState<_FiltersDialog> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final details = ref.watch(titleDetailsProvider).value ?? const {};
+  Map<String, TitleDetail>? _scanned;
+  late Map<String, List<String>> _values;
+  late List<int> _ages;
+  late double _first, _last;
+
+  /// Reads every row once per TMDB update, not on each slider move.
+  void _scan(Map<String, TitleDetail> details) {
+    if (identical(details, _scanned)) return;
+    _scanned = details;
     final values = {for (final f in _facets) f: <String>{}};
     final years = <int>{};
     final ages = <int>{};
@@ -374,8 +415,20 @@ class _FiltersDialogState extends ConsumerState<_FiltersDialog> {
       if (t.year case final y?) years.add(y);
       if (t.age case final a?) ages.add(a);
     }
-    final first = (years.isEmpty ? 0 : years.reduce(min)).toDouble();
-    final last = (years.isEmpty ? 0 : years.reduce(max)).toDouble();
+    _values = {
+      for (final f in _facets)
+        f: values[f]!.toList()
+          ..sort((a, b) => _nameFor(f)(a).compareTo(_nameFor(f)(b))),
+    };
+    _ages = ages.toList()..sort();
+    _first = (years.isEmpty ? 0 : years.reduce(min)).toDouble();
+    _last = (years.isEmpty ? 0 : years.reduce(max)).toDouble();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _scan(ref.watch(titleDetailsProvider).value ?? const {});
+    final (first, last) = (_first, _last);
     final range = _years ?? RangeValues(first, last);
 
     final hasKey = (ref.watch(tmdbKeyProvider).value ?? '').isNotEmpty;
@@ -389,9 +442,6 @@ class _FiltersDialogState extends ConsumerState<_FiltersDialog> {
             '$done of $total. Choices fill in as it goes.',
       _ => null,
     };
-
-    String Function(String) nameFor(String facet) =>
-        facet == 'Language' ? languageName : (s) => s;
 
     return AlertDialog(
       title: Text('More filters', style: heading(22)),
@@ -411,16 +461,14 @@ class _FiltersDialogState extends ConsumerState<_FiltersDialog> {
               for (final facet in _facets)
                 _pick<String>(
                   facet,
-                  values[facet]!.toList()
-                    ..sort((a, b) =>
-                        nameFor(facet)(a).compareTo(nameFor(facet)(b))),
+                  _values[facet]!,
                   _picks[facet],
-                  nameFor(facet),
+                  _nameFor(facet),
                   (v) => v == null ? _picks.remove(facet) : _picks[facet] = v,
                 ),
               _pick<int>(
                 'Age limit',
-                ages.toList()..sort(),
+                _ages,
                 _maxAge,
                 (a) => a == 0 ? 'All ages' : 'Up to $a',
                 (v) => _maxAge = v,

@@ -12,8 +12,10 @@ class M3uBackend implements PlaylistBackend {
   M3uBackend(this._dio);
   final Dio _dio;
 
+  /// One file holds everything, so there is nothing to hand to [onLive].
   @override
-  Future<PlaylistData?> fetch(Source source) async {
+  Future<PlaylistData?> fetch(Source source,
+      {Future<void> Function(PlaylistData live)? onLive}) async {
     final dir = await Directory.systemTemp.createTemp('cloud_iptv_m3u');
     try {
       final path = '${dir.path}${Platform.pathSeparator}playlist.m3u';
