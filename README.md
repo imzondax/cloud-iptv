@@ -12,8 +12,9 @@ Xtream Codes and XMLTV guides.
     dart run build_runner build --delete-conflicting-outputs
     flutter run
 
-Linux also needs `libmpv-dev`. Building on Windows needs Developer Mode
-(`start ms-settings:developers`) and Visual Studio with the C++ workload.
+Linux also needs `libmpv-dev` and `libsecret-1-dev`. Building on Windows needs
+Developer Mode (`start ms-settings:developers`) and Visual Studio with the C++
+workload and its optional C++ ATL component, which the keychain plugin uses.
 
 ## Windows packaging
 
