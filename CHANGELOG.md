@@ -1,5 +1,9 @@
 # Changelog
 
+## Build 6 (1.0.5) - 2026-11-15
+
+- The sync icon in Sources spins while a sync is running.
+
 ## Build 5 (1.0.4) - 2026-11-14
 
 - Mute the stream by clicking the speaker icon in the player.

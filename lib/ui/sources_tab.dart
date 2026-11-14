@@ -43,7 +43,7 @@ class SourcesTab extends ConsumerWidget {
                   runSpacing: 8,
                   children: [
                     OutlinedButton.icon(
-                      icon: const Icon(Icons.sync, size: 18),
+                      icon: _SyncIcon(spinning: syncing),
                       label: Text(syncing ? 'Syncing…' : 'Sync now'),
                       onPressed: syncing
                           ? null
@@ -938,4 +938,49 @@ class _SourceDialogState extends ConsumerState<_SourceDialog> {
       ],
     );
   }
+}
+
+class _SyncIcon extends StatefulWidget {
+  const _SyncIcon({required this.spinning});
+
+  final bool spinning;
+
+  @override
+  State<_SyncIcon> createState() => _SyncIconState();
+}
+
+class _SyncIconState extends State<_SyncIcon>
+    with SingleTickerProviderStateMixin {
+  late final _spin = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 1),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.spinning) _spin.repeat();
+  }
+
+  @override
+  void didUpdateWidget(_SyncIcon old) {
+    super.didUpdateWidget(old);
+    if (widget.spinning && !_spin.isAnimating) {
+      _spin.repeat();
+    } else if (!widget.spinning) {
+      _spin.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _spin.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => RotationTransition(
+        turns: _spin,
+        child: const Icon(Icons.sync, size: 18),
+      );
 }
